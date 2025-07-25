@@ -23,15 +23,13 @@ import json
 import logging
 import os
 from functools import partial
-from typing import Any, Callable, List, Optional, Tuple
+from typing import Callable, List, Optional, Tuple
 
 import hydra
 import numpy as np
 import pytorch_lightning as pl
 import rasterio
-import sklearn.metrics as metrics
 import torch
-import torch.nn as nn
 from omegaconf import DictConfig, OmegaConf
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
@@ -45,7 +43,7 @@ from instageo.model.dataloader import (
     process_test,
 )
 from instageo.model.infer_utils import chip_inference, sliding_window_inference
-from instageo.model.model import PrithviSeg
+from instageo.model.train import PrithviRegressionModule, PrithviSegmentationModule
 
 pl.seed_everything(seed=1042, workers=True)
 torch.backends.cudnn.deterministic = True
@@ -150,304 +148,79 @@ def create_dataloader(
     )
 
 
-class PrithviSegmentationModule(pl.LightningModule):
-    """Prithvi Segmentation PyTorch Lightning Module."""
+def create_model(
+    cfg: DictConfig, IM_SIZE: int, TEMPORAL_SIZE: int
+) -> pl.LightningModule:
+    """Create the appropriate model based on task type.
 
-    def __init__(
-        self,
-        image_size: int = 224,
-        learning_rate: float = 1e-4,
-        freeze_backbone: bool = True,
-        num_classes: int = 2,
-        temporal_step: int = 1,
-        class_weights: List[float] = [1, 2],
-        ignore_index: int = -100,
-        weight_decay: float = 1e-2,
-    ) -> None:
-        """Initialization.
+    Args:
+        cfg (DictConfig): Configuration object.
+        IM_SIZE (int): Image size.
+        TEMPORAL_SIZE (int): Temporal dimension size.
 
-        Initialize the PrithviSegmentationModule, a PyTorch Lightning module for image
-        segmentation.
-
-        Args:
-            image_size (int): Size of input image.
-            num_classes (int): Number of classes for segmentation.
-            temporal_step (int): Number of temporal steps for multi-temporal input.
-            learning_rate (float): Learning rate for the optimizer.
-            freeze_backbone (bool): Flag to freeze ViT transformer backbone weights.
-            class_weights (List[float]): Class weights for mitigating class imbalance.
-            ignore_index (int): Class index to ignore during loss computation.
-            weight_decay (float): Weight decay for L2 regularization.
-        """
-        super().__init__()
-        self.net = PrithviSeg(
-            image_size=image_size,
-            num_classes=num_classes,
-            temporal_step=temporal_step,
-            freeze_backbone=freeze_backbone,
+    Returns:
+        pl.LightningModule: Either PrithviSegmentationModule or PrithviRegressionModule.
+    """
+    if cfg.is_reg_task:
+        return PrithviRegressionModule(
+            image_size=IM_SIZE,
+            learning_rate=cfg.train.learning_rate,
+            freeze_backbone=cfg.model.freeze_backbone,
+            temporal_step=TEMPORAL_SIZE,
+            weight_decay=cfg.train.weight_decay,
+            loss_function=getattr(cfg.train, "loss_function", "mse"),
+            ignore_index=cfg.train.ignore_index,
         )
-        weight_tensor = torch.tensor(class_weights).float() if class_weights else None
-        self.criterion = nn.CrossEntropyLoss(
-            ignore_index=ignore_index, weight=weight_tensor
+    else:
+        return PrithviSegmentationModule(
+            image_size=IM_SIZE,
+            learning_rate=cfg.train.learning_rate,
+            freeze_backbone=cfg.model.freeze_backbone,
+            num_classes=cfg.model.num_classes,
+            temporal_step=TEMPORAL_SIZE,
+            class_weights=cfg.train.class_weights,
+            ignore_index=cfg.train.ignore_index,
+            weight_decay=cfg.train.weight_decay,
         )
-        self.learning_rate = learning_rate
-        self.ignore_index = ignore_index
-        self.weight_decay = weight_decay
 
-    def forward(self, x: torch.Tensor) -> torch.Tensor:
-        """Define the forward pass of the model.
 
-        Args:
-            x (torch.Tensor): Input tensor for the model.
+def load_model_from_checkpoint(
+    cfg: DictConfig, checkpoint_path: str, IM_SIZE: int, TEMPORAL_SIZE: int
+) -> pl.LightningModule:
+    """Load the appropriate model from checkpoint based on task type.
 
-        Returns:
-            torch.Tensor: Output tensor from the model.
-        """
-        return self.net(x)
+    Args:
+        cfg (DictConfig): Configuration object.
+        checkpoint_path (str): Path to the checkpoint file.
+        IM_SIZE (int): Image size.
+        TEMPORAL_SIZE (int): Temporal dimension size.
 
-    def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
-        """Perform a training step.
-
-        Args:
-            batch (Any): Input batch data.
-            batch_idx (int): Index of the batch.
-
-        Returns:
-            torch.Tensor: The loss value for the batch.
-        """
-        inputs, labels = batch
-        outputs = self.forward(inputs)
-        loss = self.criterion(outputs, labels.long())
-        self.log_metrics(outputs, labels, "train", loss)
-        return loss
-
-    def validation_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
-        """Perform a validation step.
-
-        Args:
-            batch (Any): Input batch data.
-            batch_idx (int): Index of the batch.
-
-        Returns:
-            torch.Tensor: The loss value for the batch.
-        """
-        inputs, labels = batch
-        outputs = self.forward(inputs)
-        loss = self.criterion(outputs, labels.long())
-        self.log_metrics(outputs, labels, "val", loss)
-        return loss
-
-    def test_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
-        """Perform a test step.
-
-        Args:
-            batch (Any): Input batch data.
-            batch_idx (int): Index of the batch.
-
-        Returns:
-            torch.Tensor: The loss value for the batch.
-        """
-        inputs, labels = batch
-        outputs = self.forward(inputs)
-        loss = self.criterion(outputs, labels.long())
-        self.log_metrics(outputs, labels, "test", loss)
-        return loss
-
-    def predict_step(self, batch: Any) -> torch.Tensor:
-        """Perform a prediction step.
-
-        Args:
-            batch (Any): Input batch data.
-
-        Returns:
-            torch.Tensor: The loss value for the batch.
-        """
-        prediction = self.forward(batch)
-        probabilities = torch.nn.functional.softmax(prediction, dim=1)[:, 1, :, :]
-        return probabilities
-
-    def configure_optimizers(
-        self,
-    ) -> Tuple[
-        List[torch.optim.Optimizer], List[torch.optim.lr_scheduler._LRScheduler]
-    ]:
-        """Configure the model's optimizers and learning rate schedulers.
-
-        Returns:
-            Tuple[List[torch.optim.Optimizer], List[torch.optim.lr_scheduler]]:
-            A tuple containing the list of optimizers and the list of LR schedulers.
-        """
-        optimizer = torch.optim.AdamW(
-            self.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay
+    Returns:
+        pl.LightningModule: Either PrithviSegmentationModule or PrithviRegressionModule.
+    """
+    if cfg.is_reg_task:
+        return PrithviRegressionModule.load_from_checkpoint(
+            checkpoint_path,
+            image_size=IM_SIZE,
+            learning_rate=cfg.train.learning_rate,
+            freeze_backbone=cfg.model.freeze_backbone,
+            temporal_step=TEMPORAL_SIZE,
+            weight_decay=cfg.train.weight_decay,
+            loss_function=getattr(cfg.train, "loss_function", "mse"),
+            ignore_index=cfg.train.ignore_index,
         )
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-            optimizer, T_0=10, T_mult=2, eta_min=0
+    else:
+        return PrithviSegmentationModule.load_from_checkpoint(
+            checkpoint_path,
+            image_size=IM_SIZE,
+            learning_rate=cfg.train.learning_rate,
+            freeze_backbone=cfg.model.freeze_backbone,
+            num_classes=cfg.model.num_classes,
+            temporal_step=TEMPORAL_SIZE,
+            class_weights=cfg.train.class_weights,
+            ignore_index=cfg.train.ignore_index,
+            weight_decay=cfg.train.weight_decay,
         )
-        return [optimizer], [scheduler]
-
-    def log_metrics(
-        self,
-        predictions: torch.Tensor,
-        labels: torch.Tensor,
-        stage: str,
-        loss: torch.Tensor,
-    ) -> None:
-        """Log all metrics for any stage.
-
-        Args:
-            predictions(torch.Tensor): Prediction tensor from the model.
-            labels(torch.Tensor): Label mask.
-            stage (str): One of train, val and test stages.
-            loss (torch.Tensor): Loss value.
-
-        Returns:
-            None.
-        """
-        out = self.compute_metrics(predictions, labels)
-        self.log(
-            f"{stage}_loss",
-            loss,
-            on_step=True,
-            on_epoch=True,
-            prog_bar=True,
-            logger=True,
-        )
-        self.log(
-            f"{stage}_aAcc",
-            out["acc"],
-            on_step=True,
-            on_epoch=True,
-            prog_bar=True,
-            logger=True,
-        )
-        self.log(
-            f"{stage}_roc_auc",
-            out["roc_auc"],
-            on_step=True,
-            on_epoch=True,
-            prog_bar=True,
-            logger=True,
-        )
-        self.log(
-            f"{stage}_mIoU",
-            out["iou"],
-            on_step=True,
-            on_epoch=True,
-            prog_bar=True,
-            logger=True,
-        )
-        for idx, value in enumerate(out["iou_per_class"]):
-            self.log(
-                f"{stage}_IoU_{idx}",
-                value,
-                on_step=True,
-                on_epoch=True,
-                prog_bar=True,
-                logger=True,
-            )
-        for idx, value in enumerate(out["acc_per_class"]):
-            self.log(
-                f"{stage}_Acc_{idx}",
-                value,
-                on_step=True,
-                on_epoch=True,
-                prog_bar=True,
-                logger=True,
-            )
-        for idx, value in enumerate(out["precision_per_class"]):
-            self.log(
-                f"{stage}_Precision_{idx}",
-                value,
-                on_step=True,
-                on_epoch=True,
-                prog_bar=True,
-                logger=True,
-            )
-        for idx, value in enumerate(out["recall_per_class"]):
-            self.log(
-                f"{stage}_Recall_{idx}",
-                value,
-                on_step=True,
-                on_epoch=True,
-                prog_bar=True,
-                logger=True,
-            )
-
-    def compute_metrics(
-        self, pred_mask: torch.Tensor, gt_mask: torch.Tensor
-    ) -> dict[str, List[float]]:
-        """Calculate Metrics.
-
-        The computed metrics includes Intersection over Union (IoU), Accuracy, Precision, Recall and
-        ROC-AUC.
-
-        Args:
-            pred_mask (np.array): Predicted segmentation mask.
-            gt_mask (np.array): Ground truth segmentation mask.
-
-        Returns:
-            dict: A dictionary containing 'iou', 'overall_accuracy', and
-                'accuracy_per_class', 'precision_per_class' and 'recall_per_class'.
-        """
-        prediction_proba = torch.nn.functional.softmax(pred_mask.detach(), dim=1)[
-            :, 1, :, :
-        ]
-        pred_mask = torch.argmax(pred_mask, dim=1)
-        no_ignore = gt_mask.ne(self.ignore_index).to(self.device)
-        prediction_proba = prediction_proba.masked_select(no_ignore).cpu().numpy()
-        pred_mask = pred_mask.masked_select(no_ignore).cpu().numpy()
-        gt_mask = gt_mask.masked_select(no_ignore).cpu().numpy()
-        classes = np.unique(np.concatenate((gt_mask, pred_mask)))
-
-        iou_per_class = []
-        accuracy_per_class = []
-        precision_per_class = []
-        recall_per_class = []
-
-        for clas in classes:
-            pred_cls = pred_mask == clas
-            gt_cls = gt_mask == clas
-
-            intersection = np.logical_and(pred_cls, gt_cls)
-            union = np.logical_or(pred_cls, gt_cls)
-            true_positive = np.sum(intersection)
-            false_positive = np.sum(pred_cls) - true_positive
-            false_negative = np.sum(gt_cls) - true_positive
-
-            if np.any(union):
-                iou = np.sum(intersection) / np.sum(union)
-                iou_per_class.append(iou)
-
-            accuracy = true_positive / np.sum(gt_cls) if np.sum(gt_cls) > 0 else 0
-            accuracy_per_class.append(accuracy)
-
-            precision = (
-                true_positive / (true_positive + false_positive)
-                if (true_positive + false_positive) > 0
-                else 0
-            )
-            precision_per_class.append(precision)
-
-            recall = (
-                true_positive / (true_positive + false_negative)
-                if (true_positive + false_negative) > 0
-                else 0
-            )
-            recall_per_class.append(recall)
-
-        # Overall IoU and accuracy
-        mean_iou = np.mean(iou_per_class) if iou_per_class else 0.0
-        overall_accuracy = np.sum(pred_mask == gt_mask) / gt_mask.size
-        roc_auc = metrics.roc_auc_score(gt_mask, prediction_proba)
-        return {
-            "roc_auc": roc_auc,
-            "iou": mean_iou,
-            "acc": overall_accuracy,
-            "acc_per_class": accuracy_per_class,
-            "iou_per_class": iou_per_class,
-            "precision_per_class": precision_per_class,
-            "recall_per_class": recall_per_class,
-        }
 
 
 def compute_mean_std(data_loader: DataLoader) -> Tuple[List[float], List[float]]:
@@ -531,11 +304,10 @@ def main(cfg: DictConfig) -> None:
             train_dataset,
             batch_size=batch_size,
             shuffle=True,
-            num_workers=1,
+            num_workers=0,
         )
         mean, std = compute_mean_std(train_loader)
-        print(mean)
-        print(std)
+        print(json.dumps({"mean": mean, "std": std}))
         exit(0)
 
     if cfg.mode == "train":
@@ -574,29 +346,22 @@ def main(cfg: DictConfig) -> None:
             constant_multiplier=cfg.dataloader.constant_multiplier,
         )
         train_loader = create_dataloader(
-            train_dataset, batch_size=batch_size, shuffle=True, num_workers=1
+            train_dataset, batch_size=batch_size, shuffle=True, num_workers=0
         )
         valid_loader = create_dataloader(
-            valid_dataset, batch_size=batch_size, shuffle=False, num_workers=1
+            valid_dataset, batch_size=batch_size, shuffle=False, num_workers=0
         )
-        model = PrithviSegmentationModule(
-            image_size=IM_SIZE,
-            learning_rate=cfg.train.learning_rate,
-            freeze_backbone=cfg.model.freeze_backbone,
-            num_classes=cfg.model.num_classes,
-            temporal_step=cfg.dataloader.temporal_dim,
-            class_weights=cfg.train.class_weights,
-            ignore_index=cfg.train.ignore_index,
-            weight_decay=cfg.train.weight_decay,
-        )
+        model = create_model(cfg, IM_SIZE, TEMPORAL_SIZE)
         hydra_out_dir = hydra.core.hydra_config.HydraConfig.get().runtime.output_dir
+        monitor = "val_RMSE" if cfg.is_reg_task else "val_IoU"
+        mode = "min" if cfg.is_reg_task else "max"
         checkpoint_callback = ModelCheckpoint(
-            monitor="val_mIoU",
             dirpath=hydra_out_dir,
-            filename="instageo_epoch-{epoch:02d}-val_iou-{val_mIoU:.2f}",
+            filename="instageo_best_checkpoint",
             auto_insert_metric_name=False,
-            mode="max",
-            save_top_k=3,
+            save_top_k=1,
+            monitor=monitor,
+            mode=mode,
         )
 
         logger = TensorBoardLogger(hydra_out_dir, name="instageo")
@@ -635,32 +400,14 @@ def main(cfg: DictConfig) -> None:
         test_loader = create_dataloader(
             test_dataset, batch_size=batch_size, collate_fn=eval_collate_fn
         )
-        model = PrithviSegmentationModule.load_from_checkpoint(
-            checkpoint_path,
-            image_size=IM_SIZE,
-            learning_rate=cfg.train.learning_rate,
-            freeze_backbone=cfg.model.freeze_backbone,
-            num_classes=cfg.model.num_classes,
-            temporal_step=cfg.dataloader.temporal_dim,
-            class_weights=cfg.train.class_weights,
-            ignore_index=cfg.train.ignore_index,
-            weight_decay=cfg.train.weight_decay,
-        )
+        model = load_model_from_checkpoint(cfg, checkpoint_path, IM_SIZE, TEMPORAL_SIZE)
         trainer = pl.Trainer(accelerator=get_device())
         result = trainer.test(model, dataloaders=test_loader)
         log.info(f"Evaluation results:\n{result}")
 
     elif cfg.mode == "sliding_inference":
-        model = PrithviSegmentationModule.load_from_checkpoint(
-            cfg.checkpoint_path,
-            image_size=IM_SIZE,
-            learning_rate=cfg.train.learning_rate,
-            freeze_backbone=cfg.model.freeze_backbone,
-            num_classes=cfg.model.num_classes,
-            temporal_step=cfg.dataloader.temporal_dim,
-            class_weights=cfg.train.class_weights,
-            ignore_index=cfg.train.ignore_index,
-            weight_decay=cfg.train.weight_decay,
+        model = load_model_from_checkpoint(
+            cfg, cfg.checkpoint_path, IM_SIZE, TEMPORAL_SIZE
         )
         model.eval()
         infer_filepath = os.path.join(root_dir, cfg.test_filepath)
@@ -749,17 +496,7 @@ def main(cfg: DictConfig) -> None:
         test_loader = create_dataloader(
             test_dataset, batch_size=batch_size, collate_fn=infer_collate_fn
         )
-        model = PrithviSegmentationModule.load_from_checkpoint(
-            checkpoint_path,
-            image_size=IM_SIZE,
-            learning_rate=cfg.train.learning_rate,
-            freeze_backbone=cfg.model.freeze_backbone,
-            num_classes=cfg.model.num_classes,
-            temporal_step=cfg.dataloader.temporal_dim,
-            class_weights=cfg.train.class_weights,
-            ignore_index=cfg.train.ignore_index,
-            weight_decay=cfg.train.weight_decay,
-        )
+        model = load_model_from_checkpoint(cfg, checkpoint_path, IM_SIZE, TEMPORAL_SIZE)
         chip_inference(test_loader, output_dir, model, device=get_device())
 
 

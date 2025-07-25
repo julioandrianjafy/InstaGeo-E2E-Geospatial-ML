@@ -1,0 +1,39 @@
+# config.yaml
+root_dir: null
+valid_filepath: null
+train_filepath: null
+test_filepath: null
+checkpoint_path: null
+mode: train # stats, train, sliding_inference or chip_inference
+is_reg_task: True
+
+train:
+  learning_rate: 0.0001
+  num_epochs: 10
+  batch_size: 16
+  class_weights: null
+  ignore_index: -1
+  weight_decay: 0.01
+
+
+model:
+  freeze_backbone: False
+  num_classes: 2
+
+dataloader:
+  bands: [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17]
+  mean: [205.98260498046875,395.0086364746094,298.18536376953125,2513.62109375,1352.9415283203125,608.6032104492188]
+  std: [256.2041015625,228.92388916015625,237.7798309326172,603.4733276367188,365.07489013671875,241.7609100341797]
+  img_size: 256
+  temporal_dim: 3
+  replace_label: null
+  reduce_to_zero: False
+  no_data_value: -9999
+  constant_multiplier: 1.0
+
+
+test:
+  img_size: 256
+  crop_size: 256
+  stride: 256
+  mask_cloud: False
