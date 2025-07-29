@@ -29,6 +29,7 @@ class PrithviSegmentationModule(pl.LightningModule):
         class_weights: List[float] = [1, 2],
         ignore_index: int = -100,
         weight_decay: float = 1e-2,
+        depth: int | None = None,
     ) -> None:
         """Initialization.
 
@@ -44,6 +45,8 @@ class PrithviSegmentationModule(pl.LightningModule):
             class_weights (List[float]): Class weights for mitigating class imbalance.
             ignore_index (int): Class index to ignore during loss computation.
             weight_decay (float): Weight decay for L2 regularization.
+            depth (int | None): Number of transformer layers to use. If None, uses default
+                from config.
         """
         super().__init__()
         self.net = PrithviSeg(
@@ -51,6 +54,7 @@ class PrithviSegmentationModule(pl.LightningModule):
             num_classes=num_classes,
             temporal_step=temporal_step,
             freeze_backbone=freeze_backbone,
+            depth=depth,
         )
         weight_tensor = torch.tensor(class_weights).float() if class_weights else None
         self.criterion = nn.CrossEntropyLoss(
@@ -328,6 +332,7 @@ class PrithviRegressionModule(pl.LightningModule):
         weight_decay: float = 1e-2,
         loss_function: str = "mse",
         ignore_index: int = -100,
+        depth: int | None = None,
     ) -> None:
         """Initialization.
 
@@ -341,6 +346,8 @@ class PrithviRegressionModule(pl.LightningModule):
             weight_decay (float): Weight decay for L2 regularization.
             loss_function (str): Loss function to use ('mse', 'mae', 'huber').
             ignore_index (int): Index value to ignore during metric computation.
+            depth (int | None): Number of transformer layers to use. If None, uses default
+                from config.
         """
         super().__init__()
         self.net = PrithviSeg(
@@ -348,6 +355,7 @@ class PrithviRegressionModule(pl.LightningModule):
             num_classes=1,  # Single output channel for regression
             temporal_step=temporal_step,
             freeze_backbone=freeze_backbone,
+            depth=depth,
         )
 
         # Choose loss function

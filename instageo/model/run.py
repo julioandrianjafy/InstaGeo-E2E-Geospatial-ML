@@ -170,6 +170,7 @@ def create_model(
             weight_decay=cfg.train.weight_decay,
             loss_function=getattr(cfg.train, "loss_function", "mse"),
             ignore_index=cfg.train.ignore_index,
+            depth=cfg.model.get("depth", None),
         )
     else:
         return PrithviSegmentationModule(
@@ -181,6 +182,7 @@ def create_model(
             class_weights=cfg.train.class_weights,
             ignore_index=cfg.train.ignore_index,
             weight_decay=cfg.train.weight_decay,
+            depth=cfg.model.get("depth", None),
         )
 
 
@@ -208,6 +210,7 @@ def load_model_from_checkpoint(
             weight_decay=cfg.train.weight_decay,
             loss_function=getattr(cfg.train, "loss_function", "mse"),
             ignore_index=cfg.train.ignore_index,
+            depth=cfg.model.get("depth", None),
         )
     else:
         return PrithviSegmentationModule.load_from_checkpoint(
@@ -220,6 +223,7 @@ def load_model_from_checkpoint(
             class_weights=cfg.train.class_weights,
             ignore_index=cfg.train.ignore_index,
             weight_decay=cfg.train.weight_decay,
+            depth=cfg.model.get("depth", None),
         )
 
 
