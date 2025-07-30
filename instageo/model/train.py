@@ -333,6 +333,7 @@ class PrithviRegressionModule(pl.LightningModule):
         loss_function: str = "mse",
         ignore_index: int = -100,
         depth: int | None = None,
+        log_transform: bool = False,
     ) -> None:
         """Initialization.
 
@@ -348,6 +349,7 @@ class PrithviRegressionModule(pl.LightningModule):
             ignore_index (int): Index value to ignore during metric computation.
             depth (int | None): Number of transformer layers to use. If None, uses default
                 from config.
+            log_transform (bool): Whether to apply log transformation to target values.
         """
         super().__init__()
         self.net = PrithviSeg(
@@ -371,6 +373,7 @@ class PrithviRegressionModule(pl.LightningModule):
         self.learning_rate = learning_rate
         self.ignore_index = ignore_index
         self.weight_decay = weight_decay
+        self.log_transform = log_transform
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Define the forward pass of the model.
@@ -382,6 +385,35 @@ class PrithviRegressionModule(pl.LightningModule):
             torch.Tensor: Output tensor from the model.
         """
         return self.net(x)
+
+    def _apply_log_transform(self, labels: torch.Tensor) -> torch.Tensor:
+        """Apply log transformation to labels if enabled.
+
+        Args:
+            labels (torch.Tensor): Original labels.
+
+        Returns:
+            torch.Tensor: Transformed labels.
+        """
+        if self.log_transform:
+            # Add small epsilon to avoid log(0) and handle negative values
+            epsilon = 1e-8
+            labels = torch.clamp(labels, min=epsilon)
+            return torch.log(labels)
+        return labels
+
+    def _inverse_log_transform(self, predictions: torch.Tensor) -> torch.Tensor:
+        """Apply inverse log transformation to predictions if log transform was used.
+
+        Args:
+            predictions (torch.Tensor): Model predictions.
+
+        Returns:
+            torch.Tensor: Transformed predictions.
+        """
+        if self.log_transform:
+            return torch.exp(predictions)
+        return predictions
 
     def training_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
         """Perform a training step.
@@ -397,8 +429,27 @@ class PrithviRegressionModule(pl.LightningModule):
         outputs = self.forward(inputs)
         # Squeeze the output to match label dimensions (remove channel dimension)
         outputs = outputs.squeeze(1)
-        loss = self.criterion(outputs, labels.float())
-        self.log_metrics(outputs, labels, "train", loss)
+
+        # Create mask for valid values (excluding ignore_index)
+        valid_mask = labels.ne(self.ignore_index)
+
+        # Apply mask to filter out ignore_index values
+        valid_outputs = outputs.masked_select(valid_mask)
+        valid_labels = labels.masked_select(valid_mask).float()
+
+        # Apply log transformation to valid labels if enabled
+        valid_labels_transformed = self._apply_log_transform(valid_labels)
+
+        # Compute loss only on valid values
+        if len(valid_outputs) > 0:
+            loss = self.criterion(valid_outputs, valid_labels_transformed)
+        else:
+            # If no valid values, return zero loss
+            loss = torch.tensor(0.0, device=self.device, requires_grad=True)
+
+        # For logging metrics, use original scale
+        outputs_original_scale = self._inverse_log_transform(outputs)
+        self.log_metrics(outputs_original_scale, labels, "train", loss)
         return loss
 
     def validation_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
@@ -414,8 +465,27 @@ class PrithviRegressionModule(pl.LightningModule):
         inputs, labels = batch
         outputs = self.forward(inputs)
         outputs = outputs.squeeze(1)
-        loss = self.criterion(outputs, labels.float())
-        self.log_metrics(outputs, labels, "val", loss)
+
+        # Create mask for valid values (excluding ignore_index)
+        valid_mask = labels.ne(self.ignore_index)
+
+        # Apply mask to filter out ignore_index values
+        valid_outputs = outputs.masked_select(valid_mask)
+        valid_labels = labels.masked_select(valid_mask).float()
+
+        # Apply log transformation to valid labels if enabled
+        valid_labels_transformed = self._apply_log_transform(valid_labels)
+
+        # Compute loss only on valid values
+        if len(valid_outputs) > 0:
+            loss = self.criterion(valid_outputs, valid_labels_transformed)
+        else:
+            # If no valid values, return zero loss
+            loss = torch.tensor(0.0, device=self.device, requires_grad=True)
+
+        # For logging metrics, use original scale
+        outputs_original_scale = self._inverse_log_transform(outputs)
+        self.log_metrics(outputs_original_scale, labels, "val", loss)
         return loss
 
     def test_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
@@ -431,8 +501,27 @@ class PrithviRegressionModule(pl.LightningModule):
         inputs, labels = batch
         outputs = self.forward(inputs)
         outputs = outputs.squeeze(1)
-        loss = self.criterion(outputs, labels.float())
-        self.log_metrics(outputs, labels, "test", loss)
+
+        # Create mask for valid values (excluding ignore_index)
+        valid_mask = labels.ne(self.ignore_index)
+
+        # Apply mask to filter out ignore_index values
+        valid_outputs = outputs.masked_select(valid_mask)
+        valid_labels = labels.masked_select(valid_mask).float()
+
+        # Apply log transformation to valid labels if enabled
+        valid_labels_transformed = self._apply_log_transform(valid_labels)
+
+        # Compute loss only on valid values
+        if len(valid_outputs) > 0:
+            loss = self.criterion(valid_outputs, valid_labels_transformed)
+        else:
+            # If no valid values, return zero loss
+            loss = torch.tensor(0.0, device=self.device, requires_grad=True)
+
+        # For logging metrics, use original scale
+        outputs_original_scale = self._inverse_log_transform(outputs)
+        self.log_metrics(outputs_original_scale, labels, "test", loss)
         return loss
 
     def predict_step(self, batch: Any) -> torch.Tensor:
@@ -442,10 +531,15 @@ class PrithviRegressionModule(pl.LightningModule):
             batch (Any): Input batch data.
 
         Returns:
-            torch.Tensor: The predicted values.
+            torch.Tensor: The predicted values in original scale.
         """
         prediction = self.forward(batch)
-        return prediction.squeeze(1)
+        prediction = prediction.squeeze(1)
+
+        # Apply inverse log transformation to get predictions in original scale
+        prediction = self._inverse_log_transform(prediction)
+
+        return prediction
 
     def configure_optimizers(
         self,

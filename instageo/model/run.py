@@ -171,6 +171,7 @@ def create_model(
             loss_function=getattr(cfg.train, "loss_function", "mse"),
             ignore_index=cfg.train.ignore_index,
             depth=cfg.model.get("depth", None),
+            log_transform=getattr(cfg.train, "log_transform", False),
         )
     else:
         return PrithviSegmentationModule(
@@ -211,6 +212,7 @@ def load_model_from_checkpoint(
             loss_function=getattr(cfg.train, "loss_function", "mse"),
             ignore_index=cfg.train.ignore_index,
             depth=cfg.model.get("depth", None),
+            log_transform=getattr(cfg.train, "log_transform", False),
         )
     else:
         return PrithviSegmentationModule.load_from_checkpoint(

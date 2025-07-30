@@ -14,6 +14,7 @@ train:
   class_weights: null
   ignore_index: -1
   weight_decay: 0.01
+  log_transform: False
 
 
 model:
