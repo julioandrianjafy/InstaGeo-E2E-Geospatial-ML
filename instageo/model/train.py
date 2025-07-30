@@ -362,9 +362,9 @@ class PrithviRegressionModule(pl.LightningModule):
 
         # Choose loss function
         if loss_function == "mse":
-            self.criterion = nn.MSELoss()
+            self.criterion = nn.MSELoss(reduction="none")
         elif loss_function == "mae":
-            self.criterion = nn.L1Loss()
+            self.criterion = nn.L1Loss(reduction="none")
         elif loss_function == "huber":
             self.criterion = nn.HuberLoss()
         else:
@@ -434,15 +434,15 @@ class PrithviRegressionModule(pl.LightningModule):
         valid_mask = labels.ne(self.ignore_index)
 
         # Apply mask to filter out ignore_index values
-        valid_outputs = outputs.masked_select(valid_mask)
-        valid_labels = labels.masked_select(valid_mask).float()
+        valid_outputs = outputs[valid_mask]
+        valid_labels = labels[valid_mask]
 
         # Apply log transformation to valid labels if enabled
         valid_labels_transformed = self._apply_log_transform(valid_labels)
 
         # Compute loss only on valid values
         if len(valid_outputs) > 0:
-            loss = self.criterion(valid_outputs, valid_labels_transformed)
+            loss = self.criterion(valid_outputs, valid_labels_transformed).mean()
         else:
             # If no valid values, return zero loss
             loss = torch.tensor(0.0, device=self.device, requires_grad=True)
@@ -470,15 +470,15 @@ class PrithviRegressionModule(pl.LightningModule):
         valid_mask = labels.ne(self.ignore_index)
 
         # Apply mask to filter out ignore_index values
-        valid_outputs = outputs.masked_select(valid_mask)
-        valid_labels = labels.masked_select(valid_mask).float()
+        valid_outputs = outputs[valid_mask]
+        valid_labels = labels[valid_mask]
 
         # Apply log transformation to valid labels if enabled
         valid_labels_transformed = self._apply_log_transform(valid_labels)
 
         # Compute loss only on valid values
         if len(valid_outputs) > 0:
-            loss = self.criterion(valid_outputs, valid_labels_transformed)
+            loss = self.criterion(valid_outputs, valid_labels_transformed).mean()
         else:
             # If no valid values, return zero loss
             loss = torch.tensor(0.0, device=self.device, requires_grad=True)
@@ -506,15 +506,15 @@ class PrithviRegressionModule(pl.LightningModule):
         valid_mask = labels.ne(self.ignore_index)
 
         # Apply mask to filter out ignore_index values
-        valid_outputs = outputs.masked_select(valid_mask)
-        valid_labels = labels.masked_select(valid_mask).float()
+        valid_outputs = outputs[valid_mask]
+        valid_labels = labels[valid_mask]
 
         # Apply log transformation to valid labels if enabled
         valid_labels_transformed = self._apply_log_transform(valid_labels)
 
         # Compute loss only on valid values
         if len(valid_outputs) > 0:
-            loss = self.criterion(valid_outputs, valid_labels_transformed)
+            loss = self.criterion(valid_outputs, valid_labels_transformed).mean()
         else:
             # If no valid values, return zero loss
             loss = torch.tensor(0.0, device=self.device, requires_grad=True)
