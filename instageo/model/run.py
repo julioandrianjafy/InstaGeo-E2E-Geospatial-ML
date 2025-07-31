@@ -36,7 +36,12 @@ from pytorch_lightning.loggers import TensorBoardLogger
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
-from instageo.model.dataloader import InstaGeoDataset, process_and_augment, process_data
+from instageo.model.dataloader import (
+    InstaGeoDataset,
+    process_and_augment,
+    process_data,
+    process_test,
+)
 from instageo.model.infer_utils import chip_inference, sliding_window_inference
 from instageo.model.train import PrithviRegressionModule, PrithviSegmentationModule
 
@@ -198,7 +203,7 @@ def load_model_from_checkpoint(
         pl.LightningModule: Either PrithviSegmentationModule or PrithviRegressionModule.
     """
     if cfg.is_reg_task:
-        model = PrithviRegressionModule.load_from_checkpoint(
+        return PrithviRegressionModule.load_from_checkpoint(
             checkpoint_path,
             image_size=IM_SIZE,
             learning_rate=cfg.train.learning_rate,
@@ -211,7 +216,7 @@ def load_model_from_checkpoint(
             log_transform=getattr(cfg.train, "log_transform", False),
         )
     else:
-        model = PrithviSegmentationModule.load_from_checkpoint(
+        return PrithviSegmentationModule.load_from_checkpoint(
             checkpoint_path,
             image_size=IM_SIZE,
             learning_rate=cfg.train.learning_rate,
@@ -223,10 +228,6 @@ def load_model_from_checkpoint(
             weight_decay=cfg.train.weight_decay,
             depth=cfg.model.get("depth", None),
         )
-    model.load_state_dict(
-        torch.load(checkpoint_path, map_location=torch.device("cpu"))["state_dict"]
-    )
-    return model
 
 
 def compute_mean_std(data_loader: DataLoader) -> Tuple[List[float], List[float]]:
@@ -383,52 +384,29 @@ def main(cfg: DictConfig) -> None:
         # run training and validation
         trainer.fit(model, train_loader, valid_loader)
 
-        # Load the best model checkpoint and run evaluation
-        best_ckpt_path = checkpoint_callback.best_model_path
-        if not best_ckpt_path:
-            log.warning("No best checkpoint found, using current model for evaluation.")
-            eval_model = model
-        else:
-            print(
-                f"Loading best checkpoint from {best_ckpt_path}, "
-                f"best score: {checkpoint_callback.best_model_score}"
-            )
-            eval_model = type(model).load_from_checkpoint(
-                best_ckpt_path,
-                image_size=IM_SIZE,
-                learning_rate=cfg.train.learning_rate,
-                freeze_backbone=cfg.model.freeze_backbone,
-                temporal_step=TEMPORAL_SIZE,
-                weight_decay=cfg.train.weight_decay,
-                loss_function=getattr(cfg.train, "loss_function", "mse"),
-                ignore_index=cfg.train.ignore_index,
-                depth=cfg.model.get("depth", None),
-                log_transform=getattr(cfg.train, "log_transform", False),
-            )
-        result = trainer.test(eval_model, dataloaders=valid_loader)
-        print(f"Validation results:\n{result}")
-
     elif cfg.mode == "eval":
         check_required_flags(["root_dir", "test_filepath", "checkpoint_path"], cfg)
         test_dataset = InstaGeoDataset(
             filename=test_filepath,
             input_root=root_dir,
             preprocess_func=partial(
-                process_and_augment,
+                process_test,
                 mean=MEAN,
                 std=STD,
                 temporal_size=TEMPORAL_SIZE,
-                im_size=IM_SIZE,
-                augment=False,
+                img_size=cfg.test.img_size,
+                crop_size=cfg.test.crop_size,
+                stride=cfg.test.stride,
             ),
             bands=BANDS,
             replace_label=cfg.dataloader.replace_label,
             reduce_to_zero=cfg.dataloader.reduce_to_zero,
             no_data_value=cfg.dataloader.no_data_value,
             constant_multiplier=cfg.dataloader.constant_multiplier,
+            include_filenames=True,
         )
         test_loader = create_dataloader(
-            test_dataset, batch_size=batch_size, shuffle=False, num_workers=0
+            test_dataset, batch_size=batch_size, collate_fn=eval_collate_fn
         )
         model = load_model_from_checkpoint(cfg, checkpoint_path, IM_SIZE, TEMPORAL_SIZE)
         trainer = pl.Trainer(accelerator=get_device())
