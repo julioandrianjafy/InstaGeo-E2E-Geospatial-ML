@@ -389,7 +389,7 @@ def main(cfg: DictConfig) -> None:
             log.warning("No best checkpoint found, using current model for evaluation.")
             eval_model = model
         else:
-            log.info(
+            print(
                 f"Loading best checkpoint from {best_ckpt_path}, "
                 f"best score: {checkpoint_callback.best_model_score}"
             )
@@ -406,7 +406,7 @@ def main(cfg: DictConfig) -> None:
                 log_transform=getattr(cfg.train, "log_transform", False),
             )
         result = trainer.test(eval_model, dataloaders=valid_loader)
-        log.info(f"Validation results:\n{result}")
+        print(f"Validation results:\n{result}")
 
     elif cfg.mode == "eval":
         check_required_flags(["root_dir", "test_filepath", "checkpoint_path"], cfg)
