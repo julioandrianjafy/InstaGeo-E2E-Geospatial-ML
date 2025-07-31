@@ -387,6 +387,31 @@ def main(cfg: DictConfig) -> None:
         # run training and validation
         trainer.fit(model, train_loader, valid_loader)
 
+        # Load the best model checkpoint and run evaluation
+        best_ckpt_path = checkpoint_callback.best_model_path
+        if not best_ckpt_path:
+            log.warning("No best checkpoint found, using current model for evaluation.")
+            eval_model = model
+        else:
+            log.info(
+                f"Loading best checkpoint from {best_ckpt_path}, "
+                f"best score: {checkpoint_callback.best_model_score}"
+            )
+            eval_model = type(model).load_from_checkpoint(
+                best_ckpt_path,
+                image_size=IM_SIZE,
+                learning_rate=cfg.train.learning_rate,
+                freeze_backbone=cfg.model.freeze_backbone,
+                temporal_step=TEMPORAL_SIZE,
+                weight_decay=cfg.train.weight_decay,
+                loss_function=getattr(cfg.train, "loss_function", "mse"),
+                ignore_index=cfg.train.ignore_index,
+                depth=cfg.model.get("depth", None),
+                log_transform=getattr(cfg.train, "log_transform", False),
+            )
+        result = trainer.test(eval_model, dataloaders=valid_loader)
+        log.info(f"Validation results:\n{result}")
+
     elif cfg.mode == "eval":
         check_required_flags(["root_dir", "test_filepath", "checkpoint_path"], cfg)
         test_dataset = InstaGeoDataset(
