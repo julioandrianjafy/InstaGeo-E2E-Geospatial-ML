@@ -203,7 +203,7 @@ def load_model_from_checkpoint(
         pl.LightningModule: Either PrithviSegmentationModule or PrithviRegressionModule.
     """
     if cfg.is_reg_task:
-        return PrithviRegressionModule.load_from_checkpoint(
+        model = PrithviRegressionModule.load_from_checkpoint(
             checkpoint_path,
             image_size=IM_SIZE,
             learning_rate=cfg.train.learning_rate,
@@ -216,7 +216,7 @@ def load_model_from_checkpoint(
             log_transform=getattr(cfg.train, "log_transform", False),
         )
     else:
-        return PrithviSegmentationModule.load_from_checkpoint(
+        model = PrithviSegmentationModule.load_from_checkpoint(
             checkpoint_path,
             image_size=IM_SIZE,
             learning_rate=cfg.train.learning_rate,
@@ -228,6 +228,10 @@ def load_model_from_checkpoint(
             weight_decay=cfg.train.weight_decay,
             depth=cfg.model.get("depth", None),
         )
+    model.load_state_dict(
+        torch.load(checkpoint_path, map_location=torch.device("cpu"))["state_dict"]
+    )
+    return model
 
 
 def compute_mean_std(data_loader: DataLoader) -> Tuple[List[float], List[float]]:
