@@ -543,9 +543,7 @@ class PrithviRegressionModule(pl.LightningModule):
 
     def configure_optimizers(
         self,
-    ) -> Tuple[
-        List[torch.optim.Optimizer], List[torch.optim.lr_scheduler._LRScheduler]
-    ]:
+    ) -> List[torch.optim.Optimizer]:
         """Configure the model's optimizers and learning rate schedulers.
 
         Returns:
@@ -555,10 +553,10 @@ class PrithviRegressionModule(pl.LightningModule):
         optimizer = torch.optim.AdamW(
             self.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay
         )
-        scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-            optimizer, T_0=10, T_mult=2, eta_min=0
-        )
-        return [optimizer], [scheduler]
+        # scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+        #     optimizer, T_0=10, T_mult=2, eta_min=0
+        # )
+        return [optimizer]
 
     def log_metrics(
         self,

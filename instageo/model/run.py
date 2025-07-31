@@ -50,7 +50,8 @@ torch.backends.cudnn.deterministic = True
 torch.backends.cudnn.benchmark = False
 
 log = logging.getLogger(__name__)
-log.setLevel(logging.INFO)
+log.setLevel(logging.WARNING)
+logging.getLogger("botocore.credentials").setLevel(logging.WARNING)
 
 
 def check_required_flags(required_flags: List[str], config: DictConfig) -> None:
