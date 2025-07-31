@@ -36,12 +36,7 @@ from pytorch_lightning.loggers import TensorBoardLogger
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
-from instageo.model.dataloader import (
-    InstaGeoDataset,
-    process_and_augment,
-    process_data,
-    process_test,
-)
+from instageo.model.dataloader import InstaGeoDataset, process_and_augment, process_data
 from instageo.model.infer_utils import chip_inference, sliding_window_inference
 from instageo.model.train import PrithviRegressionModule, PrithviSegmentationModule
 
@@ -349,6 +344,7 @@ def main(cfg: DictConfig) -> None:
                 std=STD,
                 temporal_size=TEMPORAL_SIZE,
                 im_size=IM_SIZE,
+                augment=False,
             ),
             bands=BANDS,
             replace_label=cfg.dataloader.replace_label,
@@ -418,23 +414,21 @@ def main(cfg: DictConfig) -> None:
             filename=test_filepath,
             input_root=root_dir,
             preprocess_func=partial(
-                process_test,
+                process_and_augment,
                 mean=MEAN,
                 std=STD,
                 temporal_size=TEMPORAL_SIZE,
-                img_size=cfg.test.img_size,
-                crop_size=cfg.test.crop_size,
-                stride=cfg.test.stride,
+                im_size=IM_SIZE,
+                augment=False,
             ),
             bands=BANDS,
             replace_label=cfg.dataloader.replace_label,
             reduce_to_zero=cfg.dataloader.reduce_to_zero,
             no_data_value=cfg.dataloader.no_data_value,
             constant_multiplier=cfg.dataloader.constant_multiplier,
-            include_filenames=True,
         )
         test_loader = create_dataloader(
-            test_dataset, batch_size=batch_size, collate_fn=eval_collate_fn
+            test_dataset, batch_size=batch_size, shuffle=False, num_workers=0
         )
         model = load_model_from_checkpoint(cfg, checkpoint_path, IM_SIZE, TEMPORAL_SIZE)
         trainer = pl.Trainer(accelerator=get_device())
