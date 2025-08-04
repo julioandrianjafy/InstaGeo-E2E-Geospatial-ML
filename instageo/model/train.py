@@ -63,6 +63,26 @@ class PrithviSegmentationModule(pl.LightningModule):
         self.learning_rate = learning_rate
         self.ignore_index = ignore_index
         self.weight_decay = weight_decay
+        self.num_classes = num_classes
+
+        # Initialize metric accumulators for efficient global computation
+        self.reset_metric_accumulators()
+
+    def reset_metric_accumulators(self) -> None:
+        """Reset metric accumulators for a new epoch."""
+        # For confusion matrix computation
+        self.val_confusion_matrix = torch.zeros(
+            (self.num_classes, self.num_classes), dtype=torch.long
+        )
+        self.test_confusion_matrix = torch.zeros(
+            (self.num_classes, self.num_classes), dtype=torch.long
+        )
+
+        # For ROC-AUC computation (we need to accumulate these)
+        self.val_probabilities: List[np.ndarray] = []
+        self.val_true_labels: List[np.ndarray] = []
+        self.test_probabilities: List[np.ndarray] = []
+        self.test_true_labels: List[np.ndarray] = []
 
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Define the forward pass of the model.
@@ -104,7 +124,21 @@ class PrithviSegmentationModule(pl.LightningModule):
         inputs, labels = batch
         outputs = self.forward(inputs)
         loss = self.criterion(outputs, labels.long())
-        self.log_metrics(outputs, labels, "val", loss)
+
+        # Log only the loss per batch
+        self.log(
+            "val_loss",
+            loss,
+            on_step=True,
+            on_epoch=True,
+            prog_bar=True,
+            logger=True,
+        )
+
+        # Update confusion matrix and accumulate data for ROC-AUC
+        self._update_confusion_matrix(outputs, labels, "val")
+        self._accumulate_for_roc_auc(outputs, labels, "val")
+
         return loss
 
     def test_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
@@ -120,8 +154,200 @@ class PrithviSegmentationModule(pl.LightningModule):
         inputs, labels = batch
         outputs = self.forward(inputs)
         loss = self.criterion(outputs, labels.long())
-        self.log_metrics(outputs, labels, "test", loss)
+
+        # Log only the loss per batch
+        self.log(
+            "test_loss",
+            loss,
+            on_step=True,
+            on_epoch=True,
+            prog_bar=True,
+            logger=True,
+        )
+
+        # Update confusion matrix and accumulate data for ROC-AUC
+        self._update_confusion_matrix(outputs, labels, "test")
+        self._accumulate_for_roc_auc(outputs, labels, "test")
+
         return loss
+
+    def _update_confusion_matrix(
+        self, outputs: torch.Tensor, labels: torch.Tensor, stage: str
+    ) -> None:
+        """Update confusion matrix with current batch."""
+        # Get predictions
+        pred_mask = torch.argmax(outputs, dim=1)
+
+        # Create mask for valid values (excluding ignore_index)
+        valid_mask = labels.ne(self.ignore_index)
+
+        # Apply mask
+        pred_valid = pred_mask[valid_mask]
+        labels_valid = labels[valid_mask]
+
+        # Update confusion matrix
+        confusion_matrix = getattr(self, f"{stage}_confusion_matrix")
+
+        # Compute confusion matrix for this batch
+        for true_class in range(self.num_classes):
+            for pred_class in range(self.num_classes):
+                confusion_matrix[true_class, pred_class] += torch.sum(
+                    (labels_valid == true_class) & (pred_valid == pred_class)
+                ).item()
+
+    def _accumulate_for_roc_auc(
+        self, outputs: torch.Tensor, labels: torch.Tensor, stage: str
+    ) -> None:
+        """Accumulate ONLY valid pixel probabilities and labels for ROC-AUC computation."""
+        # Create mask for valid values
+        valid_mask = labels.ne(self.ignore_index)
+
+        # Early exit if no valid pixels in this batch
+        if not valid_mask.any():
+            return
+
+        # Get class probabilities for valid pixels only (for binary classification, use class 1)
+        probabilities = torch.nn.functional.softmax(outputs.detach(), dim=1)[:, 1, :, :]
+
+        # Extract and flatten ONLY valid pixels to minimize memory usage
+        prob_valid = probabilities[valid_mask].cpu().numpy()
+        labels_valid = labels[valid_mask].cpu().numpy()
+
+        # Store only valid pixels (much more memory efficient than storing full spatial maps)
+        prob_list = getattr(self, f"{stage}_probabilities")
+        label_list = getattr(self, f"{stage}_true_labels")
+
+        prob_list.append(prob_valid)
+        label_list.append(labels_valid)
+
+    def on_validation_epoch_start(self) -> None:
+        """Reset metric accumulators at the start of validation epoch."""
+        self.val_confusion_matrix.zero_()
+        self.val_probabilities.clear()
+        self.val_true_labels.clear()
+
+    def on_test_epoch_start(self) -> None:
+        """Reset metric accumulators at the start of test epoch."""
+        self.test_confusion_matrix.zero_()
+        self.test_probabilities.clear()
+        self.test_true_labels.clear()
+
+    def on_validation_epoch_end(self) -> None:
+        """Compute and log global validation metrics at the end of the epoch."""
+        # Compute metrics from confusion matrix
+        metrics_dict = self._compute_metrics_from_confusion_matrix(
+            self.val_confusion_matrix
+        )
+
+        # Compute ROC-AUC
+        if self.val_probabilities and self.val_true_labels:
+            all_probs = np.concatenate(self.val_probabilities)
+            all_labels = np.concatenate(self.val_true_labels)
+            if len(np.unique(all_labels)) > 1:  # Need at least 2 classes for ROC-AUC
+                roc_auc = metrics.roc_auc_score(all_labels, all_probs)
+                metrics_dict["roc_auc"] = roc_auc
+
+        # Log global metrics
+        self.log("val_aAcc", metrics_dict["acc"], prog_bar=True, logger=True)
+        if "roc_auc" in metrics_dict:
+            self.log("val_roc_auc", metrics_dict["roc_auc"], prog_bar=True, logger=True)
+        self.log("val_IoU", metrics_dict["iou"], prog_bar=True, logger=True)
+
+        for idx, value in enumerate(metrics_dict["iou_per_class"]):
+            self.log(f"val_IoU_{idx}", value, logger=True)
+        for idx, value in enumerate(metrics_dict["acc_per_class"]):
+            self.log(f"val_Acc_{idx}", value, logger=True)
+        for idx, value in enumerate(metrics_dict["precision_per_class"]):
+            self.log(f"val_Precision_{idx}", value, logger=True)
+        for idx, value in enumerate(metrics_dict["recall_per_class"]):
+            self.log(f"val_Recall_{idx}", value, logger=True)
+
+    def on_test_epoch_end(self) -> None:
+        """Compute and log global test metrics at the end of the epoch."""
+        # Compute metrics from confusion matrix
+        metrics_dict = self._compute_metrics_from_confusion_matrix(
+            self.test_confusion_matrix
+        )
+
+        # Compute ROC-AUC
+        if self.test_probabilities and self.test_true_labels:
+            all_probs = np.concatenate(self.test_probabilities)
+            all_labels = np.concatenate(self.test_true_labels)
+            if len(np.unique(all_labels)) > 1:  # Need at least 2 classes for ROC-AUC
+                roc_auc = metrics.roc_auc_score(all_labels, all_probs)
+                metrics_dict["roc_auc"] = roc_auc
+
+        # Log global metrics
+        self.log("test_aAcc", metrics_dict["acc"], prog_bar=True, logger=True)
+        if "roc_auc" in metrics_dict:
+            self.log(
+                "test_roc_auc", metrics_dict["roc_auc"], prog_bar=True, logger=True
+            )
+        self.log("test_IoU", metrics_dict["iou"], prog_bar=True, logger=True)
+
+        for idx, value in enumerate(metrics_dict["iou_per_class"]):
+            self.log(f"test_IoU_{idx}", value, logger=True)
+        for idx, value in enumerate(metrics_dict["acc_per_class"]):
+            self.log(f"test_Acc_{idx}", value, logger=True)
+        for idx, value in enumerate(metrics_dict["precision_per_class"]):
+            self.log(f"test_Precision_{idx}", value, logger=True)
+        for idx, value in enumerate(metrics_dict["recall_per_class"]):
+            self.log(f"test_Recall_{idx}", value, logger=True)
+
+    def _compute_metrics_from_confusion_matrix(
+        self, confusion_matrix: torch.Tensor
+    ) -> dict:
+        """Compute metrics from confusion matrix."""
+        cm = confusion_matrix.cpu().numpy()
+
+        # Calculate per-class metrics
+        iou_per_class = []
+        acc_per_class = []
+        precision_per_class = []
+        recall_per_class = []
+
+        for i in range(self.num_classes):
+            # True positives, false positives, false negatives
+            tp = cm[i, i]
+            fp = cm[:, i].sum() - tp
+            fn = cm[i, :].sum() - tp
+
+            # IoU
+            if tp + fp + fn > 0:
+                iou = tp / (tp + fp + fn)
+                iou_per_class.append(iou)
+            else:
+                iou_per_class.append(0.0)
+
+            # Per-class accuracy (recall)
+            if cm[i, :].sum() > 0:
+                acc = tp / cm[i, :].sum()
+                acc_per_class.append(acc)
+            else:
+                acc_per_class.append(0.0)
+
+            # Precision
+            if tp + fp > 0:
+                precision = tp / (tp + fp)
+                precision_per_class.append(precision)
+            else:
+                precision_per_class.append(0.0)
+
+            # Recall (same as per-class accuracy)
+            recall_per_class.append(acc_per_class[-1])
+
+        # Overall metrics
+        overall_accuracy = cm.diagonal().sum() / cm.sum() if cm.sum() > 0 else 0.0
+        mean_iou = np.mean(iou_per_class) if iou_per_class else 0.0
+
+        return {
+            "acc": overall_accuracy,
+            "iou": mean_iou,
+            "acc_per_class": acc_per_class,
+            "iou_per_class": iou_per_class,
+            "precision_per_class": precision_per_class,
+            "recall_per_class": recall_per_class,
+        }
 
     def predict_step(self, batch: Any) -> torch.Tensor:
         """Perform a prediction step.
@@ -199,7 +425,7 @@ class PrithviSegmentationModule(pl.LightningModule):
             logger=True,
         )
         self.log(
-            f"{stage}_mIoU",
+            f"{stage}_IoU",
             out["iou"],
             on_step=True,
             on_epoch=True,
@@ -375,6 +601,24 @@ class PrithviRegressionModule(pl.LightningModule):
         self.weight_decay = weight_decay
         self.log_transform = log_transform
 
+        # Initialize metric accumulators for efficient global computation
+        self.reset_metric_accumulators()
+
+    def reset_metric_accumulators(self) -> None:
+        """Reset metric accumulators for a new epoch."""
+        # Regression metric accumulators
+        self.val_sum_squared_errors = 0.0
+        self.val_sum_absolute_errors = 0.0
+        self.val_sum_labels = 0.0
+        self.val_sum_squared_labels = 0.0
+        self.val_count = 0
+
+        self.test_sum_squared_errors = 0.0
+        self.test_sum_absolute_errors = 0.0
+        self.test_sum_labels = 0.0
+        self.test_sum_squared_labels = 0.0
+        self.test_count = 0
+
     def forward(self, x: torch.Tensor) -> torch.Tensor:
         """Define the forward pass of the model.
 
@@ -483,9 +727,20 @@ class PrithviRegressionModule(pl.LightningModule):
             # If no valid values, return zero loss
             loss = torch.tensor(0.0, device=self.device, requires_grad=True)
 
-        # For logging metrics, use original scale
+        # Log only the loss per batch
+        self.log(
+            "val_loss",
+            loss,
+            on_step=True,
+            on_epoch=True,
+            prog_bar=True,
+            logger=True,
+        )
+
+        # For global metrics, use original scale and accumulate statistics
         outputs_original_scale = self._inverse_log_transform(outputs)
-        self.log_metrics(outputs_original_scale, labels, "val", loss)
+        self._accumulate_regression_metrics(outputs_original_scale, labels, "val")
+
         return loss
 
     def test_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
@@ -519,10 +774,148 @@ class PrithviRegressionModule(pl.LightningModule):
             # If no valid values, return zero loss
             loss = torch.tensor(0.0, device=self.device, requires_grad=True)
 
-        # For logging metrics, use original scale
+        # Log only the loss per batch
+        self.log(
+            "test_loss",
+            loss,
+            on_step=True,
+            on_epoch=True,
+            prog_bar=True,
+            logger=True,
+        )
+
+        # For global metrics, use original scale and accumulate statistics
         outputs_original_scale = self._inverse_log_transform(outputs)
-        self.log_metrics(outputs_original_scale, labels, "test", loss)
+        self._accumulate_regression_metrics(outputs_original_scale, labels, "test")
+
         return loss
+
+    def _accumulate_regression_metrics(
+        self, predictions: torch.Tensor, labels: torch.Tensor, stage: str
+    ) -> None:
+        """Accumulate statistics for regression metrics computation."""
+        # Create mask for valid values
+        valid_mask = labels.ne(self.ignore_index)
+
+        # Apply mask
+        pred_valid = predictions[valid_mask]
+        labels_valid = labels[valid_mask]
+
+        if len(pred_valid) == 0:
+            return
+
+        # Convert to CPU numpy for computation
+        pred_np = pred_valid.detach().cpu().numpy()
+        labels_np = labels_valid.detach().cpu().numpy()
+
+        # Remove any remaining NaN values
+        nan_mask = ~(np.isnan(pred_np) | np.isnan(labels_np))
+        pred_np = pred_np[nan_mask]
+        labels_np = labels_np[nan_mask]
+
+        if len(pred_np) == 0:
+            return
+
+        # Accumulate statistics
+        squared_errors = (pred_np - labels_np) ** 2
+        absolute_errors = np.abs(pred_np - labels_np)
+
+        if stage == "val":
+            self.val_sum_squared_errors += np.sum(squared_errors)
+            self.val_sum_absolute_errors += np.sum(absolute_errors)
+            self.val_sum_labels += np.sum(labels_np)
+            self.val_sum_squared_labels += np.sum(labels_np**2)
+            self.val_count += len(pred_np)
+        else:  # test
+            self.test_sum_squared_errors += np.sum(squared_errors)
+            self.test_sum_absolute_errors += np.sum(absolute_errors)
+            self.test_sum_labels += np.sum(labels_np)
+            self.test_sum_squared_labels += np.sum(labels_np**2)
+            self.test_count += len(pred_np)
+
+    def on_validation_epoch_start(self) -> None:
+        """Reset metric accumulators at the start of validation epoch."""
+        self.val_sum_squared_errors = 0.0
+        self.val_sum_absolute_errors = 0.0
+        self.val_sum_labels = 0.0
+        self.val_sum_squared_labels = 0.0
+        self.val_count = 0
+
+    def on_test_epoch_start(self) -> None:
+        """Reset metric accumulators at the start of test epoch."""
+        self.test_sum_squared_errors = 0.0
+        self.test_sum_absolute_errors = 0.0
+        self.test_sum_labels = 0.0
+        self.test_sum_squared_labels = 0.0
+        self.test_count = 0
+
+    def on_validation_epoch_end(self) -> None:
+        """Compute and log global validation metrics at the end of the epoch."""
+        if self.val_count == 0:
+            return
+
+        # Compute global metrics from accumulated statistics
+        metrics_dict = self._compute_regression_metrics_from_accumulation("val")
+
+        # Log global metrics
+        self.log("val_RMSE", metrics_dict["rmse"], prog_bar=True, logger=True)
+        self.log("val_MAE", metrics_dict["mae"], prog_bar=True, logger=True)
+        self.log("val_R2", metrics_dict["r2"], prog_bar=True, logger=True)
+
+    def on_test_epoch_end(self) -> None:
+        """Compute and log global test metrics at the end of the epoch."""
+        if self.test_count == 0:
+            return
+
+        # Compute global metrics from accumulated statistics
+        metrics_dict = self._compute_regression_metrics_from_accumulation("test")
+
+        # Log global metrics
+        self.log("test_RMSE", metrics_dict["rmse"], prog_bar=True, logger=True)
+        self.log("test_MAE", metrics_dict["mae"], prog_bar=True, logger=True)
+        self.log("test_R2", metrics_dict["r2"], prog_bar=True, logger=True)
+
+    def _compute_regression_metrics_from_accumulation(self, stage: str) -> dict:
+        """Compute regression metrics from accumulated statistics."""
+        if stage == "val":
+            count = self.val_count
+            sum_se = self.val_sum_squared_errors
+            sum_ae = self.val_sum_absolute_errors
+            sum_labels = self.val_sum_labels
+            sum_sq_labels = self.val_sum_squared_labels
+        else:  # test
+            count = self.test_count
+            sum_se = self.test_sum_squared_errors
+            sum_ae = self.test_sum_absolute_errors
+            sum_labels = self.test_sum_labels
+            sum_sq_labels = self.test_sum_squared_labels
+
+        if count == 0:
+            return {"rmse": float("inf"), "mae": float("inf"), "r2": 0.0}
+
+        # Calculate RMSE
+        mse = sum_se / count
+        rmse = np.sqrt(mse)
+
+        # Calculate MAE
+        mae = sum_ae / count
+
+        # Calculate R² using the formula: R² = 1 - (SS_res / SS_tot)
+        # SS_res = sum of squared errors (already have this)
+        # SS_tot = sum of squared deviations from mean
+        mean_labels = sum_labels / count
+        ss_tot = sum_sq_labels - count * (mean_labels**2)
+
+        if ss_tot != 0:
+            r2 = 1 - (sum_se / ss_tot)
+        else:
+            r2 = 0.0
+
+        return {
+            "rmse": rmse,
+            "mae": mae,
+            "r2": r2,
+        }
 
     def predict_step(self, batch: Any) -> torch.Tensor:
         """Perform a prediction step.
