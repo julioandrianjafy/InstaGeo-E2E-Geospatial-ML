@@ -65,12 +65,11 @@ class PrithviSegmentationModule(pl.LightningModule):
         self.weight_decay = weight_decay
         self.num_classes = num_classes
 
-        # Initialize metric accumulators for efficient global computation
+        # Initialize metric accumulators for global metrics computation
         self.reset_metric_accumulators()
 
     def reset_metric_accumulators(self) -> None:
         """Reset metric accumulators for a new epoch."""
-        # For confusion matrix computation
         self.val_confusion_matrix = torch.zeros(
             (self.num_classes, self.num_classes), dtype=torch.long
         )
@@ -78,7 +77,6 @@ class PrithviSegmentationModule(pl.LightningModule):
             (self.num_classes, self.num_classes), dtype=torch.long
         )
 
-        # For ROC-AUC computation (we need to accumulate these)
         self.val_probabilities: List[np.ndarray] = []
         self.val_true_labels: List[np.ndarray] = []
         self.test_probabilities: List[np.ndarray] = []
@@ -135,7 +133,7 @@ class PrithviSegmentationModule(pl.LightningModule):
             logger=True,
         )
 
-        # Update confusion matrix and accumulate data for ROC-AUC
+        # Update confusion matrix and accumulate data for ROC-AUC for global metrics computation
         self._update_confusion_matrix(outputs, labels, "val")
         self._accumulate_for_roc_auc(outputs, labels, "val")
 
@@ -164,8 +162,7 @@ class PrithviSegmentationModule(pl.LightningModule):
             prog_bar=True,
             logger=True,
         )
-
-        # Update confusion matrix and accumulate data for ROC-AUC
+        # Update confusion matrix and accumulate data for ROC-AUC for global metrics computation
         self._update_confusion_matrix(outputs, labels, "test")
         self._accumulate_for_roc_auc(outputs, labels, "test")
 
@@ -175,20 +172,13 @@ class PrithviSegmentationModule(pl.LightningModule):
         self, outputs: torch.Tensor, labels: torch.Tensor, stage: str
     ) -> None:
         """Update confusion matrix with current batch."""
-        # Get predictions
         pred_mask = torch.argmax(outputs, dim=1)
 
-        # Create mask for valid values (excluding ignore_index)
         valid_mask = labels.ne(self.ignore_index)
-
-        # Apply mask
         pred_valid = pred_mask[valid_mask]
         labels_valid = labels[valid_mask]
 
-        # Update confusion matrix
         confusion_matrix = getattr(self, f"{stage}_confusion_matrix")
-
-        # Compute confusion matrix for this batch
         for true_class in range(self.num_classes):
             for pred_class in range(self.num_classes):
                 confusion_matrix[true_class, pred_class] += torch.sum(
@@ -199,21 +189,19 @@ class PrithviSegmentationModule(pl.LightningModule):
         self, outputs: torch.Tensor, labels: torch.Tensor, stage: str
     ) -> None:
         """Accumulate ONLY valid pixel probabilities and labels for ROC-AUC computation."""
-        # Create mask for valid values
+        if self.num_classes > 2:
+            raise NotImplementedError(
+                f"ROC-AUC computation is not implemented for multiclass classification "
+                f"with {self.num_classes} classes. Currently only binary classification "
+                f"(num_classes=2) is supported."
+            )
+
         valid_mask = labels.ne(self.ignore_index)
-
-        # Early exit if no valid pixels in this batch
-        if not valid_mask.any():
-            return
-
-        # Get class probabilities for valid pixels only (for binary classification, use class 1)
         probabilities = torch.nn.functional.softmax(outputs.detach(), dim=1)[:, 1, :, :]
 
-        # Extract and flatten ONLY valid pixels to minimize memory usage
         prob_valid = probabilities[valid_mask].cpu().numpy()
         labels_valid = labels[valid_mask].cpu().numpy()
 
-        # Store only valid pixels (much more memory efficient than storing full spatial maps)
         prob_list = getattr(self, f"{stage}_probabilities")
         label_list = getattr(self, f"{stage}_true_labels")
 
@@ -234,16 +222,14 @@ class PrithviSegmentationModule(pl.LightningModule):
 
     def on_validation_epoch_end(self) -> None:
         """Compute and log global validation metrics at the end of the epoch."""
-        # Compute metrics from confusion matrix
         metrics_dict = self._compute_metrics_from_confusion_matrix(
             self.val_confusion_matrix
         )
 
-        # Compute ROC-AUC
         if self.val_probabilities and self.val_true_labels:
             all_probs = np.concatenate(self.val_probabilities)
             all_labels = np.concatenate(self.val_true_labels)
-            if len(np.unique(all_labels)) > 1:  # Need at least 2 classes for ROC-AUC
+            if len(np.unique(all_labels)) > 1:
                 roc_auc = metrics.roc_auc_score(all_labels, all_probs)
                 metrics_dict["roc_auc"] = roc_auc
 
@@ -264,12 +250,10 @@ class PrithviSegmentationModule(pl.LightningModule):
 
     def on_test_epoch_end(self) -> None:
         """Compute and log global test metrics at the end of the epoch."""
-        # Compute metrics from confusion matrix
         metrics_dict = self._compute_metrics_from_confusion_matrix(
             self.test_confusion_matrix
         )
 
-        # Compute ROC-AUC
         if self.test_probabilities and self.test_true_labels:
             all_probs = np.concatenate(self.test_probabilities)
             all_labels = np.concatenate(self.test_true_labels)
@@ -300,14 +284,12 @@ class PrithviSegmentationModule(pl.LightningModule):
         """Compute metrics from confusion matrix."""
         cm = confusion_matrix.cpu().numpy()
 
-        # Calculate per-class metrics
         iou_per_class = []
         acc_per_class = []
         precision_per_class = []
         recall_per_class = []
 
         for i in range(self.num_classes):
-            # True positives, false positives, false negatives
             tp = cm[i, i]
             fp = cm[:, i].sum() - tp
             fn = cm[i, :].sum() - tp
@@ -601,12 +583,11 @@ class PrithviRegressionModule(pl.LightningModule):
         self.weight_decay = weight_decay
         self.log_transform = log_transform
 
-        # Initialize metric accumulators for efficient global computation
+        # Initialize metric accumulators for global metrics computation
         self.reset_metric_accumulators()
 
     def reset_metric_accumulators(self) -> None:
         """Reset metric accumulators for a new epoch."""
-        # Regression metric accumulators
         self.val_sum_squared_errors = 0.0
         self.val_sum_absolute_errors = 0.0
         self.val_sum_labels = 0.0
@@ -671,29 +652,17 @@ class PrithviRegressionModule(pl.LightningModule):
         """
         inputs, labels = batch
         outputs = self.forward(inputs)
-        # Squeeze the output to match label dimensions (remove channel dimension)
         outputs = outputs.squeeze(1)
 
-        # Create mask for valid values (excluding ignore_index)
         valid_mask = labels.ne(self.ignore_index)
-
-        # Apply mask to filter out ignore_index values
         valid_outputs = outputs[valid_mask]
         valid_labels = labels[valid_mask]
 
-        # Apply log transformation to valid labels if enabled
         valid_labels_transformed = self._apply_log_transform(valid_labels)
 
-        # Compute loss only on valid values
-        if len(valid_outputs) > 0:
-            loss = self.criterion(valid_outputs, valid_labels_transformed).mean()
-        else:
-            # If no valid values, return zero loss
-            loss = torch.tensor(0.0, device=self.device, requires_grad=True)
-
-        # For logging metrics, use original scale
-        outputs_original_scale = self._inverse_log_transform(outputs)
-        self.log_metrics(outputs_original_scale, labels, "train", loss)
+        loss = self.criterion(valid_outputs, valid_labels_transformed).mean()
+        valid_outputs_original_scale = self._inverse_log_transform(valid_outputs)
+        self.log_metrics(valid_outputs_original_scale, valid_labels, "train", loss)
         return loss
 
     def validation_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
@@ -710,22 +679,13 @@ class PrithviRegressionModule(pl.LightningModule):
         outputs = self.forward(inputs)
         outputs = outputs.squeeze(1)
 
-        # Create mask for valid values (excluding ignore_index)
         valid_mask = labels.ne(self.ignore_index)
-
-        # Apply mask to filter out ignore_index values
         valid_outputs = outputs[valid_mask]
         valid_labels = labels[valid_mask]
 
-        # Apply log transformation to valid labels if enabled
         valid_labels_transformed = self._apply_log_transform(valid_labels)
 
-        # Compute loss only on valid values
-        if len(valid_outputs) > 0:
-            loss = self.criterion(valid_outputs, valid_labels_transformed).mean()
-        else:
-            # If no valid values, return zero loss
-            loss = torch.tensor(0.0, device=self.device, requires_grad=True)
+        loss = self.criterion(valid_outputs, valid_labels_transformed).mean()
 
         # Log only the loss per batch
         self.log(
@@ -737,10 +697,10 @@ class PrithviRegressionModule(pl.LightningModule):
             logger=True,
         )
 
-        # For global metrics, use original scale and accumulate statistics
-        outputs_original_scale = self._inverse_log_transform(outputs)
-        self._accumulate_regression_metrics(outputs_original_scale, labels, "val")
-
+        valid_outputs_original_scale = self._inverse_log_transform(valid_outputs)
+        self._accumulate_regression_metrics(
+            valid_outputs_original_scale, valid_labels, "val"
+        )
         return loss
 
     def test_step(self, batch: Any, batch_idx: int) -> torch.Tensor:
@@ -757,22 +717,13 @@ class PrithviRegressionModule(pl.LightningModule):
         outputs = self.forward(inputs)
         outputs = outputs.squeeze(1)
 
-        # Create mask for valid values (excluding ignore_index)
         valid_mask = labels.ne(self.ignore_index)
-
-        # Apply mask to filter out ignore_index values
         valid_outputs = outputs[valid_mask]
         valid_labels = labels[valid_mask]
 
-        # Apply log transformation to valid labels if enabled
         valid_labels_transformed = self._apply_log_transform(valid_labels)
 
-        # Compute loss only on valid values
-        if len(valid_outputs) > 0:
-            loss = self.criterion(valid_outputs, valid_labels_transformed).mean()
-        else:
-            # If no valid values, return zero loss
-            loss = torch.tensor(0.0, device=self.device, requires_grad=True)
+        loss = self.criterion(valid_outputs, valid_labels_transformed).mean()
 
         # Log only the loss per batch
         self.log(
@@ -785,8 +736,10 @@ class PrithviRegressionModule(pl.LightningModule):
         )
 
         # For global metrics, use original scale and accumulate statistics
-        outputs_original_scale = self._inverse_log_transform(outputs)
-        self._accumulate_regression_metrics(outputs_original_scale, labels, "test")
+        valid_outputs_original_scale = self._inverse_log_transform(valid_outputs)
+        self._accumulate_regression_metrics(
+            valid_outputs_original_scale, valid_labels, "test"
+        )
 
         return loss
 
@@ -794,27 +747,8 @@ class PrithviRegressionModule(pl.LightningModule):
         self, predictions: torch.Tensor, labels: torch.Tensor, stage: str
     ) -> None:
         """Accumulate statistics for regression metrics computation."""
-        # Create mask for valid values
-        valid_mask = labels.ne(self.ignore_index)
-
-        # Apply mask
-        pred_valid = predictions[valid_mask]
-        labels_valid = labels[valid_mask]
-
-        if len(pred_valid) == 0:
-            return
-
-        # Convert to CPU numpy for computation
-        pred_np = pred_valid.detach().cpu().numpy()
-        labels_np = labels_valid.detach().cpu().numpy()
-
-        # Remove any remaining NaN values
-        nan_mask = ~(np.isnan(pred_np) | np.isnan(labels_np))
-        pred_np = pred_np[nan_mask]
-        labels_np = labels_np[nan_mask]
-
-        if len(pred_np) == 0:
-            return
+        pred_np = predictions.detach().cpu().numpy()
+        labels_np = labels.detach().cpu().numpy()
 
         # Accumulate statistics
         squared_errors = (pred_np - labels_np) ** 2
@@ -857,7 +791,6 @@ class PrithviRegressionModule(pl.LightningModule):
         # Compute global metrics from accumulated statistics
         metrics_dict = self._compute_regression_metrics_from_accumulation("val")
 
-        # Log global metrics
         self.log("val_RMSE", metrics_dict["rmse"], prog_bar=True, logger=True)
         self.log("val_MAE", metrics_dict["mae"], prog_bar=True, logger=True)
         self.log("val_R2", metrics_dict["r2"], prog_bar=True, logger=True)
@@ -870,7 +803,6 @@ class PrithviRegressionModule(pl.LightningModule):
         # Compute global metrics from accumulated statistics
         metrics_dict = self._compute_regression_metrics_from_accumulation("test")
 
-        # Log global metrics
         self.log("test_RMSE", metrics_dict["rmse"], prog_bar=True, logger=True)
         self.log("test_MAE", metrics_dict["mae"], prog_bar=True, logger=True)
         self.log("test_R2", metrics_dict["r2"], prog_bar=True, logger=True)
@@ -883,7 +815,7 @@ class PrithviRegressionModule(pl.LightningModule):
             sum_ae = self.val_sum_absolute_errors
             sum_labels = self.val_sum_labels
             sum_sq_labels = self.val_sum_squared_labels
-        else:  # test
+        else:
             count = self.test_count
             sum_se = self.test_sum_squared_errors
             sum_ae = self.test_sum_absolute_errors
@@ -904,7 +836,9 @@ class PrithviRegressionModule(pl.LightningModule):
         # SS_res = sum of squared errors (already have this)
         # SS_tot = sum of squared deviations from mean
         mean_labels = sum_labels / count
-        ss_tot = sum_sq_labels - count * (mean_labels**2)
+        ss_tot = sum_sq_labels - count * (
+            mean_labels**2
+        )  # using sum of squared deviations identity
 
         if ss_tot != 0:
             r2 = 1 - (sum_se / ss_tot)
@@ -928,15 +862,13 @@ class PrithviRegressionModule(pl.LightningModule):
         """
         prediction = self.forward(batch)
         prediction = prediction.squeeze(1)
-
-        # Apply inverse log transformation to get predictions in original scale
         prediction = self._inverse_log_transform(prediction)
 
         return prediction
 
     def configure_optimizers(
         self,
-    ) -> List[torch.optim.Optimizer]:
+    ) -> Tuple[List[torch.optim.Optimizer], List[torch.optim.lr_scheduler]]:
         """Configure the model's optimizers and learning rate schedulers.
 
         Returns:
@@ -946,10 +878,10 @@ class PrithviRegressionModule(pl.LightningModule):
         optimizer = torch.optim.AdamW(
             self.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay
         )
-        # scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
-        #     optimizer, T_0=10, T_mult=2, eta_min=0
-        # )
-        return [optimizer]
+        scheduler = torch.optim.lr_scheduler.CosineAnnealingWarmRestarts(
+            optimizer, T_0=10, T_mult=2, eta_min=0
+        )
+        return [optimizer], [scheduler]
 
     def log_metrics(
         self,
@@ -1018,10 +950,7 @@ class PrithviRegressionModule(pl.LightningModule):
         Returns:
             dict: A dictionary containing 'rmse', 'mae', and 'r2'.
         """
-        # Create mask for valid values (similar to segmentation module)
         no_ignore = labels.ne(self.ignore_index).to(self.device)
-
-        # Apply mask and convert to numpy
         pred_numpy = predictions.masked_select(no_ignore).detach().cpu().numpy()
         labels_numpy = labels.masked_select(no_ignore).detach().cpu().numpy()
 
