@@ -125,13 +125,16 @@ def chip_inference(
     device: str = "gpu",
     num_workers: int = 4,
 ) -> None:
-    """Chip Inference with optimizations.
+    """Chip Inference with optimizations for both segmentation and regression tasks.
 
     Performs inference on chips and saves corresponding predictions as TIFF files.
+    Automatically detects task type based on model output channels:
+    - Single channel output: Regression task (raw predictions)
+    - Multi-channel output: Segmentation task (softmax probabilities for class 1)
 
     Args:
         dataloader: Dataloader that yields input, label and input filenames.
-        model: Trained model for inference.
+        model: Trained model for inference (segmentation or regression).
         output_folder: Path to save predictions.
         device: Device used for inference.
         num_workers: Number of workers for concurrent file saving.
@@ -148,11 +151,20 @@ def chip_inference(
             for (data, _), file_names in tqdm(dataloader, desc="Running Inference"):
                 data = data.to(device)
                 prediction_batch = model(data)
-                prediction_cls = (
-                    torch.nn.functional.softmax(prediction_batch, dim=1)
-                    .cpu()
-                    .numpy()[:, 1, :, :]
-                )
+
+                # Determine if this is a regression or segmentation task based on output channels
+                num_output_channels = prediction_batch.shape[1]
+
+                if num_output_channels == 1:
+                    # Regression task: use raw predictions and squeeze channel dimension
+                    predictions = prediction_batch.squeeze(1).cpu().numpy()
+                else:
+                    # Segmentation task: apply softmax and take class 1 probability
+                    predictions = (
+                        torch.nn.functional.softmax(prediction_batch, dim=1)
+                        .cpu()
+                        .numpy()[:, 1, :, :]
+                    )
 
                 profiles = []
                 for file_name in file_names:
@@ -170,7 +182,7 @@ def chip_inference(
                         profile,
                     )
                     for prediction, file_name, profile in zip(
-                        prediction_cls, file_names, profiles
+                        predictions, file_names, profiles
                     )
                 ]
                 for future in futures:
