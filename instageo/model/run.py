@@ -99,7 +99,9 @@ def eval_collate_fn(batch: tuple[torch.Tensor]) -> tuple[torch.Tensor, torch.Ten
     return data, labels
 
 
-def infer_collate_fn(batch: tuple[torch.Tensor]) -> tuple[torch.Tensor, torch.Tensor]:
+def infer_collate_fn(
+    batch: tuple[torch.Tensor],
+) -> tuple[tuple[torch.Tensor, torch.Tensor], List[str], torch.Tensor]:
     """Inference DataLoader Collate Function.
 
     Args:
@@ -111,7 +113,8 @@ def infer_collate_fn(batch: tuple[torch.Tensor]) -> tuple[torch.Tensor, torch.Te
     data = torch.stack([a[0][0] for a in batch], 0)
     labels = [a[0][1] for a in batch]
     filepaths = [a[1] for a in batch]
-    return (data, labels), filepaths
+    nan_mask = np.stack([(a[2]) for a in batch], 0)
+    return (data, labels), filepaths, nan_mask
 
 
 def create_dataloader(
@@ -505,7 +508,12 @@ def main(cfg: DictConfig) -> None:
             test_dataset, batch_size=batch_size, collate_fn=infer_collate_fn
         )
         model = load_model_from_checkpoint(cfg, checkpoint_path, IM_SIZE, TEMPORAL_SIZE)
-        chip_inference(test_loader, output_dir, model, device=get_device())
+        chip_inference(
+            test_loader,
+            output_dir,
+            model,
+            device=get_device(),
+        )
 
 
 if __name__ == "__main__":

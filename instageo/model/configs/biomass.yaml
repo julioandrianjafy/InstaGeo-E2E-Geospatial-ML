@@ -30,7 +30,7 @@ dataloader:
   temporal_dim: 3
   replace_label: null
   reduce_to_zero: False
-  no_data_value: -9999
+  no_data_value: 0
   constant_multiplier: 1.0
 
 

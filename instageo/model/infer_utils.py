@@ -132,6 +132,8 @@ def chip_inference(
     - Single channel output: Regression task (raw predictions)
     - Multi-channel output: Segmentation task (softmax probabilities for class 1)
 
+    Also applies masking to set NaN values where original data had no_data_value.
+
     Args:
         dataloader: Dataloader that yields input, label and input filenames.
         model: Trained model for inference (segmentation or regression).
@@ -148,7 +150,9 @@ def chip_inference(
 
     with torch.no_grad():
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
-            for (data, _), file_names in tqdm(dataloader, desc="Running Inference"):
+            for (data, _), file_names, nan_mask in tqdm(
+                dataloader, desc="Running Inference"
+            ):
                 data = data.to(device)
                 prediction_batch = model(data)
 
@@ -165,6 +169,9 @@ def chip_inference(
                         .cpu()
                         .numpy()[:, 1, :, :]
                     )
+                # Mask out the predictions where the chip had no_data_value
+                nan_mask = np.any(nan_mask, axis=1).astype(int)
+                predictions = np.where(nan_mask == 1, np.nan, predictions)
 
                 profiles = []
                 for file_name in file_names:
