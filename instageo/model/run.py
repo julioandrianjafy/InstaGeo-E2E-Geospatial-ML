@@ -486,7 +486,7 @@ def main(cfg: DictConfig) -> None:
         check_required_flags(
             ["root_dir", "output_dir", "test_filepath", "checkpoint_path"], cfg
         )
-        output_dir = os.path.join(root_dir, cfg.output_dir)
+        output_dir = cfg.output_dir
         os.makedirs(output_dir, exist_ok=True)
         test_dataset = InstaGeoDataset(
             filename=test_filepath,
