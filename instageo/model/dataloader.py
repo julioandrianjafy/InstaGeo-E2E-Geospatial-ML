@@ -111,27 +111,21 @@ def normalize_and_convert_to_tensor(
 
     # Compute SAVI if at least red and NIR exist
     #what if ims_tensor.shape[1] < 4:??
+    # ims_tensor shape: (T, C, H, W), C=6
     red_idx = 2
     nir_idx = 3
+    blue_idx = 0
+
+    # Compute SAVI
     red = ims_tensor[:, red_idx, :, :]
     nir = ims_tensor[:, nir_idx, :, :]
-    savi = ((nir - red) / (nir + red + 0.5)) * 1.5  # (T,H,W)
-    savi = savi.unsqueeze(1)  # (T,1,H,W)
-    ims_tensor = torch.cat([ims_tensor, savi], dim=1)  # (T,C+1,H,W)
+    savi = ((nir - red) / (nir + red + 0.5)) * 1.5
 
-    # only normalize the raw data (not the normalized model)
-    # ims_tensor shape: (T, C, H, W) after adding SAVI
-    raw_channels = ims_tensor[:, :-1, :, :]  # all except last channel (SAVI)
-    veg_indices = ims_tensor[:, -1:, :, :]   # last channel only
+    # Replace blue channel with SAVI
+    ims_tensor[:, blue_idx, :, :] = savi
 
-    # Normalize raw channels
-    raw_channels = torch.stack([norm(im) for im in raw_channels])
-
-    # Concatenate back the veg indices
-    ims_tensor = torch.cat([raw_channels, veg_indices], dim=1)
-
-    # Permute to (C, T, H, W)
-    ims_tensor = ims_tensor.permute([1, 0, 2, 3])
+    # normalize
+    ims_tensor = torch.stack([norm(im) for im in raw_channels])
 
     if label:
         label = torch.from_numpy(np.array(label)).squeeze()
