@@ -110,7 +110,6 @@ def normalize_and_convert_to_tensor(
     ims_tensor = ims_tensor.reshape([temporal_size, -1, h, w])  # T*C,H,W -> T,C,H,W
 
     # Compute SAVI if at least red and NIR exist
-    #what if ims_tensor.shape[1] < 4:??
     # ims_tensor shape: (T, C, H, W), C=6
     red_idx = 2
     nir_idx = 3
@@ -126,6 +125,9 @@ def normalize_and_convert_to_tensor(
 
     # normalize
     ims_tensor = torch.stack([norm(im) for im in ims_tensor])
+
+    # Permute to (C, T, H, W)
+    ims_tensor = ims_tensor.permute([1, 0, 2, 3])
 
     if label:
         label = torch.from_numpy(np.array(label)).squeeze()
