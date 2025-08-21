@@ -125,7 +125,7 @@ def normalize_and_convert_to_tensor(
     ims_tensor[:, blue_idx, :, :] = savi
 
     # normalize
-    ims_tensor = torch.stack([norm(im) for im in raw_channels])
+    ims_tensor = torch.stack([norm(im) for im in ims_tensor])
 
     if label:
         label = torch.from_numpy(np.array(label)).squeeze()
