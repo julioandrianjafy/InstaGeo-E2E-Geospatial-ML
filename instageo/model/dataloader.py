@@ -91,52 +91,51 @@ def normalize_and_convert_to_tensor(
     std: List[float],
     temporal_size: int = 1,
 ) -> Tuple[torch.Tensor, torch.Tensor]:
-    """
-    Convert images to tensor, compute SAVI, take temporal mean, normalize raw channels only.
-    Returns (C,1,H,W) tensor.
-    """
-    
-    print(f"initial image size is: {ims[0].size}")
+    """Normalize the images and label and convert them to PyTorch tensors.
 
-    # Convert raw images to tensors in [0,1]
-    ims_tensor = torch.stack([transforms.ToTensor()(im) for im in ims])  # (T, C, H, W)
-    
-    # Compute SAVI per timestep: assuming band order [B, G, R, NIR, SWIR1, SWIR2]
+    Args:
+        ims (List[Image.Image]): List of PIL Image objects representing the images.
+        label (Image.Image | None): A PIL Image object representing the label.
+        mean (List[float]): The mean of each channel in the image
+        std (List[float]): The standard deviation of each channel in the image
+        temporal_size: The number of temporal steps
+
+    Returns:
+        Tuple[torch.Tensor, torch.Tensor]: A tuple of tensors representing the normalized
+        images and label.
+    """
+    norm = transforms.Normalize(mean, std)
+    ims_tensor = torch.stack([transforms.ToTensor()(im).squeeze() for im in ims])
+    _, h, w = ims_tensor.shape
+    ims_tensor = ims_tensor.reshape([temporal_size, -1, h, w])  # T*C,H,W -> T,C,H,W
+
+    # Compute SAVI if at least red and NIR exist
+    #what if ims_tensor.shape[1] < 4:??
     red_idx = 2
     nir_idx = 3
-    
-    red = ims_tensor[:, red_idx, :, :]  # (T, H, W)
-    nir = ims_tensor[:, nir_idx, :, :]  # (T, H, W)
-    
-    savi = ((nir - red) / (nir + red + 0.5)) * 1.5  # (T, H, W)
-    savi = savi.unsqueeze(1)  # add channel dim → (T, 1, H, W)
-    
-    # Concatenate raw bands + SAVI
-    ims_tensor = torch.cat([ims_tensor, savi], dim=1)  # (T, C+1, H, W)
-    
-    # Temporal mean
-    ims_tensor = ims_tensor.mean(dim=0, keepdim=True)  # (1, C+1, H, W)
-    
-    # Separate raw channels and vegetation indices
-    # change the 6 later (use variable)
-    raw_channels = ims_tensor[:, :6, :, :]   # (1, 6, H, W)
-    veg_indices = ims_tensor[:, 6:, :, :]    # (1, n_indices, H, W)
-    
-    # Normalize raw channels only
-    norm = transforms.Normalize(mean, std)
-    raw_channels_normalized = norm(raw_channels.squeeze(0)).unsqueeze(0)  # keep batch dim 1
-    
-    # Combine back with vegetation indices
-    final_tensor = torch.cat([raw_channels_normalized, veg_indices], dim=1)  # (1, C+1, H, W)
-    
-    # Permute to C,1,H,W if needed (here already 1 temporal step)
-    final_tensor = final_tensor.permute(1, 0, 2, 3)  # (C,1,H,W)
-    
-    # Process label
-    if label is not None:
-        label = torch.from_numpy(np.array(label)).unsqueeze(0).float()  # (1,H,W)
-    
-    return final_tensor, label
+    red = ims_tensor[:, red_idx, :, :]
+    nir = ims_tensor[:, nir_idx, :, :]
+    savi = ((nir - red) / (nir + red + 0.5)) * 1.5  # (T,H,W)
+    savi = savi.unsqueeze(1)  # (T,1,H,W)
+    ims_tensor = torch.cat([ims_tensor, savi], dim=1)  # (T,C+1,H,W)
+
+    # only normalize the raw data (not the normalized model)
+    # ims_tensor shape: (T, C, H, W) after adding SAVI
+    raw_channels = ims_tensor[:, :-1, :, :]  # all except last channel (SAVI)
+    veg_indices = ims_tensor[:, -1:, :, :]   # last channel only
+
+    # Normalize raw channels
+    raw_channels = torch.stack([norm(im) for im in raw_channels])
+
+    # Concatenate back the veg indices
+    ims_tensor = torch.cat([raw_channels, veg_indices], dim=1)
+
+    # Permute to (C, T, H, W)
+    ims_tensor = ims_tensor.permute([1, 0, 2, 3])
+
+    if label:
+        label = torch.from_numpy(np.array(label)).squeeze()
+    return ims_tensor, label
 
 
 def process_and_augment(
