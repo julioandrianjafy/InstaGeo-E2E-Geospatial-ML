@@ -389,6 +389,7 @@ def main(cfg: DictConfig) -> None:
             max_epochs=cfg.train.num_epochs,
             callbacks=[checkpoint_callback],
             logger=logger,
+            strategy=DDPStrategy(find_unused_parameters=True)
         )
 
         # run training and validation
