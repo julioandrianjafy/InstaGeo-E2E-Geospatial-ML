@@ -162,6 +162,10 @@ def chip_inference(
                 if num_output_channels == 1:
                     # Regression task: use raw predictions and squeeze channel dimension
                     predictions = prediction_batch.squeeze(1).cpu().numpy()
+
+                    log_transform = True:
+                    if log_transform:
+                        predictions = np.exp(predictions)
                 else:
                     # Segmentation task: apply softmax and take class 1 probability
                     predictions = (
