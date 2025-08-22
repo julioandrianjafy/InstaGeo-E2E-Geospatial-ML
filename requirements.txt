@@ -1,5 +1,4 @@
 geopandas==0.14.1
-segmentation_models_pytorch
 shapely
 pandas
 xarray[complete]
