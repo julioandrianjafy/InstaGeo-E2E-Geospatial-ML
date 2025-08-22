@@ -215,7 +215,7 @@ def load_model_from_checkpoint(
             freeze_backbone=cfg.model.freeze_backbone,
             temporal_step=TEMPORAL_SIZE,
             weight_decay=cfg.train.weight_decay,
-            loss_function=getattr(cfg.train, "loss_function", "mse"),
+            loss_function=getattr(cfg.train, "loss_function", "smoother"),
             ignore_index=cfg.train.ignore_index,
             depth=cfg.model.get("depth", None),
             log_transform=getattr(cfg.train, "log_transform", False),
