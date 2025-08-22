@@ -561,7 +561,7 @@ class PrithviRegressionModule(pl.LightningModule):
         """
         super().__init__()
         self.net = UnetRegression(
-            in_channels=6,    # your satellite channels
+            in_channels=7,    # your satellite channels
             classes=1,        # regression output
             encoder_name="efficientnet-b0",
             pretrained=True
