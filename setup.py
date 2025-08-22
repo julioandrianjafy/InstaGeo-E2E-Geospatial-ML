@@ -28,6 +28,7 @@ model_dependencies = [
     "tensorboard",
     "hydra-core",
     "omegaconf",
+    "segmentation_models_pytorch"
 ]
 apps_dependencies = [
     # Add dependencies specific to the apps component
