@@ -247,7 +247,7 @@ def compute_mean_std(data_loader: DataLoader) -> Tuple[List[float], List[float]]
     sum_sq = torch.zeros(7)
     n_pixels = 0
     
-    for data, _ in loader:  # data: (B,C,H,W)
+    for data, _ in data_loader:  # data: (B,C,H,W)
         B, C, H, W = data.shape
         flat = data.view(B, C, -1)  # (B,C,H*W)
         sum_ += flat.sum(dim=[0,2])
