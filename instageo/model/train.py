@@ -12,6 +12,8 @@ import pytorch_lightning as pl
 import sklearn.metrics as metrics
 import torch
 import torch.nn as nn
+from torch.optim.lr_scheduler import _LRScheduler
+
 
 from instageo.model.model import PrithviSeg, UnetRegression
 
@@ -869,13 +871,8 @@ class PrithviRegressionModule(pl.LightningModule):
 
     def configure_optimizers(
         self,
-    ) -> Tuple[List[torch.optim.Optimizer], List[torch.optim.lr_scheduler]]:
-        """Configure the model's optimizers and learning rate schedulers.
-
-        Returns:
-            Tuple[List[torch.optim.Optimizer], List[torch.optim.lr_scheduler]]:
-            A tuple containing the list of optimizers and the list of LR schedulers.
-        """
+    ) -> Tuple[List[torch.optim.Optimizer], List[_LRScheduler]]:
+        """Configure the model's optimizers and learning rate schedulers."""
         optimizer = torch.optim.AdamW(
             self.parameters(), lr=self.learning_rate, weight_decay=self.weight_decay
         )
