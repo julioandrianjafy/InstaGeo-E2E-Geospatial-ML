@@ -531,6 +531,7 @@ def main(cfg: DictConfig) -> None:
             output_dir,
             model,
             device=get_device(),
+            log_transform=getattr(cfg.train, "log_transform", False)
         )
 
 

@@ -124,6 +124,7 @@ def chip_inference(
     model: pl.LightningModule,
     device: str = "gpu",
     num_workers: int = 4,
+    log_transform: bool = False
 ) -> None:
     """Chip Inference with optimizations for both segmentation and regression tasks.
 
@@ -149,6 +150,9 @@ def chip_inference(
     model.to(device)
 
     with torch.no_grad():
+        if log_transform:
+            print("Need to apply reverse log transform to the predictions")
+
         with ThreadPoolExecutor(max_workers=num_workers) as executor:
             for (data, _), file_names, nan_mask in tqdm(
                 dataloader, desc="Running Inference"
@@ -163,7 +167,6 @@ def chip_inference(
                     # Regression task: use raw predictions and squeeze channel dimension
                     predictions = prediction_batch.squeeze(1).cpu().numpy()
 
-                    log_transform = True:
                     if log_transform:
                         predictions = np.exp(predictions)
                 else:
