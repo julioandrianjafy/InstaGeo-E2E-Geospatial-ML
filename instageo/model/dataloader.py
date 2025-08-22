@@ -158,7 +158,7 @@ def normalize_and_convert_to_tensor(
     mean = torch.tensor(mean).view(-1, 1, 1)  # shape (C,1,1) for broadcasting
     std = torch.tensor(std).view(-1, 1, 1)    # shape (C,1,1)
     for idx in range(ims_tensor.shape[0]-len(vegetation_index)):
-        ims_tensor[idx] = (ims_tensor[idx] - mean) / (std + 1e-6)
+        ims_tensor[idx] = (ims_tensor[idx] - mean[idx]) / (std[idx] + 1e-6)
 
     if label:
         label = torch.from_numpy(np.array(label)).squeeze()
