@@ -263,7 +263,7 @@ class PrithviSeg(nn.Module):
         return out
 
 class UnetRegression(nn.Module):
-    def __init__(self, in_channels=7, classes=1, encoder_name="efficientnet-b0", pretrained=True):
+    def __init__(self, in_channels=7, classes=1, encoder_name="efficientnet-b3", pretrained=True):
         super().__init__()
         self.model = smp.Unet(
             encoder_name=encoder_name,
