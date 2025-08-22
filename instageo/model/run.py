@@ -281,7 +281,7 @@ def main(cfg: DictConfig) -> None:
     IM_SIZE = cfg.dataloader.img_size
     TEMPORAL_SIZE = cfg.dataloader.temporal_dim
     VEGETATION_INDEX = cfg.dataloader.vegetation_index
-    RAW_CHANNELS = cfg.data_loader.raw_channels
+    RAW_CHANNELS = cfg.dataloader.raw_channels
     TOTAL_CHANNELS = RAW_CHANNELS + len(VEGETATION_INDEX)
 
     batch_size = cfg.train.batch_size
