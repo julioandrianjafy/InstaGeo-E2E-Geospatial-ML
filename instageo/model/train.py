@@ -9,7 +9,6 @@ from typing import Any, List, Tuple
 
 import numpy as np
 import pytorch_lightning as pl
-from pytorch_lightning.strategies import DDPStrategy
 import sklearn.metrics as metrics
 import torch
 import torch.nn as nn

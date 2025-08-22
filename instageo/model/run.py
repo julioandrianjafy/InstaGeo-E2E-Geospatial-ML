@@ -33,6 +33,8 @@ import torch
 from omegaconf import DictConfig, OmegaConf
 from pytorch_lightning.callbacks import ModelCheckpoint
 from pytorch_lightning.loggers import TensorBoardLogger
+from pytorch_lightning.strategies import DDPStrategy
+
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm
 
