@@ -30,6 +30,8 @@ import torch.nn as nn
 import yaml  # type: ignore
 from absl import logging
 
+import segmentation_models_pytorch as smp
+
 from instageo.model.Prithvi import ViTEncoder, get_3d_sincos_pos_embed
 
 
@@ -259,3 +261,16 @@ class PrithviSeg(nn.Module):
 
         out = self.segmentation_head(reshaped_features)
         return out
+
+class UnetRegression(nn.Module):
+    def __init__(self, in_channels=7, classes=1, encoder_name="efficientnet-b0", pretrained=True):
+        super().__init__()
+        self.model = smp.Unet(
+            encoder_name=encoder_name,
+            encoder_weights="imagenet" if pretrained else None,
+            in_channels=in_channels,
+            classes=classes
+        )
+
+    def forward(self, x):
+        return self.model(x)

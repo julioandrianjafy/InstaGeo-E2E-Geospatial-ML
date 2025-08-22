@@ -84,12 +84,47 @@ def random_crop_and_flip(
     return ims, label
 
 
+def add_savi(
+    ims_tensor: torch.Tensor
+) -> torch.Tensor:
+
+    """Add savi vegetation index to the image channel column.
+
+    Args:
+        ims_tensor (torch.Tensor): Tensor images with shape (T, C, H, W)
+
+    Returns:
+        torch.Tensor: Input tensor with the addition of savi to the channel column.
+    """
+
+    red_idx = 2
+    nir_idx = 3
+
+    # Compute SAVI
+    red = ims_tensor[:, red_idx, :, :]
+    nir = ims_tensor[:, nir_idx, :, :]
+    
+    # Compute SAVI (L = 0.5 fixed here)
+    L = 0.5
+    savi = ((nir - red) / (nir + red + L + 1e-6)) * (1.0 + L)  # shape (T, H, W)
+
+    # Add channel dimension back → (T, 1, H, W)
+    savi = savi.unsqueeze(1)
+
+    # Concatenate with original tensor along channel dim
+    ims_tensor = torch.cat([ims_tensor, savi], dim=1)
+
+    return ims_tensor
+
+
 def normalize_and_convert_to_tensor(
     ims: List[Image.Image],
     label: Image.Image | None,
     mean: List[float],
     std: List[float],
     temporal_size: int = 1,
+    vegetation_index: List[str] = [],
+    total_channels: int = 7
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Normalize the images and label and convert them to PyTorch tensors.
 
@@ -104,30 +139,26 @@ def normalize_and_convert_to_tensor(
         Tuple[torch.Tensor, torch.Tensor]: A tuple of tensors representing the normalized
         images and label.
     """
-    norm = transforms.Normalize(mean, std)
+    #norm = transforms.Normalize(mean, std)
     ims_tensor = torch.stack([transforms.ToTensor()(im).squeeze() for im in ims])
     _, h, w = ims_tensor.shape
     ims_tensor = ims_tensor.reshape([temporal_size, -1, h, w])  # T*C,H,W -> T,C,H,W
 
     # Compute SAVI if at least red and NIR exist
-    # ims_tensor shape: (T, C, H, W), C=6
-    red_idx = 2
-    nir_idx = 3
-    blue_idx = 0
-
-    # Compute SAVI
-    red = ims_tensor[:, red_idx, :, :]
-    nir = ims_tensor[:, nir_idx, :, :]
-    savi = ((nir - red) / (nir + red + 0.5)) * 1.5
-
-    # Replace blue channel with SAVI
-    ims_tensor[:, blue_idx, :, :] = savi
-
-    # normalize
-    ims_tensor = torch.stack([norm(im) for im in ims_tensor])
+    if 'savi' in vegetation_index:
+        ims_tensor = add_savi(ims_tensor)
 
     # Permute to (C, T, H, W)
     ims_tensor = ims_tensor.permute([1, 0, 2, 3])
+
+    # Compute mean over T to get (C,H,W) only
+    ims_tensor = ims_tensor.mean(dim=1)
+
+    # normalize per channel except vegetation indices
+    mean = torch.tensor(mean).view(-1, 1, 1)  # shape (C,1,1) for broadcasting
+    std = torch.tensor(std).view(-1, 1, 1)    # shape (C,1,1)
+    for idx in range(ims_tensor.shape[0]-len(vegetation_index)):
+        ims_tensor[idx] = (ims_tensor[idx] - mean) / (std + 1e-6)
 
     if label:
         label = torch.from_numpy(np.array(label)).squeeze()
@@ -142,6 +173,8 @@ def process_and_augment(
     temporal_size: int = 1,
     im_size: int = 224,
     augment: bool = True,
+    vegetation_index: List[str] = [],
+    total_channels: int = 7
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Process and augment the given images and labels.
 
@@ -165,7 +198,9 @@ def process_and_augment(
         label = Image.fromarray(y.copy().squeeze())
     if augment:
         ims, label = random_crop_and_flip(ims, label, im_size)
-    ims, label = normalize_and_convert_to_tensor(ims, label, mean, std, temporal_size)
+    ims, label = normalize_and_convert_to_tensor(
+        ims, label, mean, std, temporal_size, vegetation_index, total_channels
+    )
     return ims, label
 
 
@@ -210,6 +245,8 @@ def process_test(
     img_size: int = 512,
     crop_size: int = 224,
     stride: int = 224,
+    vegetation_index: List[str] = [],
+    total_channels: int = 7
 ) -> Tuple[torch.Tensor, torch.Tensor]:
     """Process and augment test data.
 
@@ -235,6 +272,8 @@ def process_test(
         std=std,
         temporal_size=temporal_size,
         augment=False,
+        vegetation_index=vegetation_index,
+        total_channels=total_channels
     )
 
     img_crops, mask_crops = [], []

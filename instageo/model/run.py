@@ -172,7 +172,7 @@ def create_model(
             freeze_backbone=cfg.model.freeze_backbone,
             temporal_step=TEMPORAL_SIZE,
             weight_decay=cfg.train.weight_decay,
-            loss_function=getattr(cfg.train, "loss_function", "mse"),
+            loss_function=getattr(cfg.train, "loss_function", "smoother"),
             ignore_index=cfg.train.ignore_index,
             depth=cfg.model.get("depth", None),
             log_transform=getattr(cfg.train, "log_transform", False),
@@ -243,26 +243,21 @@ def compute_mean_std(data_loader: DataLoader) -> Tuple[List[float], List[float]]
         mean (list): List of means for each channel.
         std (list): List of standard deviations for each channel.
     """
-    mean = 0.0
-    var = 0.0
-    nb_samples = 0
+    sum_ = torch.zeros(7)
+    sum_sq = torch.zeros(7)
+    n_pixels = 0
+    
+    for data, _ in loader:  # data: (B,C,H,W)
+        B, C, H, W = data.shape
+        flat = data.view(B, C, -1)  # (B,C,H*W)
+        sum_ += flat.sum(dim=[0,2])
+        sum_sq += (flat**2).sum(dim=[0,2])
+        n_pixels += B*H*W
+    
+    mean = sum_ / n_pixels
+    std = torch.sqrt(sum_sq / n_pixels - mean**2)
 
-    for data, _ in data_loader:
-        # Reshape data to (B, C, T*H*W)
-        batch_samples = data.size(0)
-        data = data.view(batch_samples, data.size(1), -1)
-
-        nb_samples += batch_samples
-
-        # Sum over batch, height and width
-        mean += data.mean(2).sum(0)
-
-        var += data.var(2, unbiased=False).sum(0)
-
-    mean /= nb_samples
-    var /= nb_samples
-    std = torch.sqrt(var)
-    return mean.tolist(), std.tolist()  # type:ignore
+    return mean, std
 
 
 @hydra.main(config_path="configs", version_base=None, config_name="config")
@@ -285,6 +280,9 @@ def main(cfg: DictConfig) -> None:
     STD = cfg.dataloader.std
     IM_SIZE = cfg.dataloader.img_size
     TEMPORAL_SIZE = cfg.dataloader.temporal_dim
+    VEGETATION_INDEX = cfg.dataloader.vegetation_index
+    RAW_CHANNELS = cfg.data_loader.raw_channels
+    TOTAL_CHANNELS = RAW_CHANNELS + len(VEGETATION_INDEX)
 
     batch_size = cfg.train.batch_size
     root_dir = cfg.root_dir
@@ -303,12 +301,16 @@ def main(cfg: DictConfig) -> None:
                 std=[1] * len(STD),
                 temporal_size=TEMPORAL_SIZE,
                 im_size=IM_SIZE,
+                vegetation_index=VEGETATION_INDEX,
+                total_channels=TOTAL_CHANNELS
             ),
             bands=BANDS,
             replace_label=cfg.dataloader.replace_label,
             reduce_to_zero=cfg.dataloader.reduce_to_zero,
             no_data_value=cfg.dataloader.no_data_value,
             constant_multiplier=cfg.dataloader.constant_multiplier,
+            total_channels=TOTAL_CHANNELS,
+            vegetation_index=VEGETATION_INDEX
         )
         train_loader = create_dataloader(
             train_dataset,
@@ -331,6 +333,8 @@ def main(cfg: DictConfig) -> None:
                 std=STD,
                 temporal_size=TEMPORAL_SIZE,
                 im_size=IM_SIZE,
+                vegetation_index=VEGETATION_INDEX,
+                total_channels=TOTAL_CHANNELS
             ),
             bands=BANDS,
             replace_label=cfg.dataloader.replace_label,
@@ -349,12 +353,15 @@ def main(cfg: DictConfig) -> None:
                 temporal_size=TEMPORAL_SIZE,
                 im_size=IM_SIZE,
                 augment=False,
+                vegetation_index=VEGETATION_INDEX,
+                total_channels=TOTAL_CHANNELS
             ),
             bands=BANDS,
             replace_label=cfg.dataloader.replace_label,
             reduce_to_zero=cfg.dataloader.reduce_to_zero,
             no_data_value=cfg.dataloader.no_data_value,
             constant_multiplier=cfg.dataloader.constant_multiplier,
+
         )
         train_loader = create_dataloader(
             train_dataset, batch_size=batch_size, shuffle=True, num_workers=0
@@ -400,6 +407,8 @@ def main(cfg: DictConfig) -> None:
                 img_size=cfg.test.img_size,
                 crop_size=cfg.test.crop_size,
                 stride=cfg.test.stride,
+                vegetation_index=VEGETATION_INDEX,
+                total_channels=TOTAL_CHANNELS
             ),
             bands=BANDS,
             replace_label=cfg.dataloader.replace_label,
@@ -454,6 +463,8 @@ def main(cfg: DictConfig) -> None:
                 std=cfg.dataloader.std,
                 temporal_size=cfg.dataloader.temporal_dim,
                 augment=False,
+                vegetation_index=VEGETATION_INDEX,
+                total_channels=TOTAL_CHANNELS
             )
             prediction = sliding_window_inference(
                 hls_tile,
@@ -498,6 +509,8 @@ def main(cfg: DictConfig) -> None:
                 temporal_size=TEMPORAL_SIZE,
                 im_size=cfg.test.img_size,
                 augment=False,
+                vegetation_index=VEGETATION_INDEX,
+                total_channels=TOTAL_CHANNELS
             ),
             bands=BANDS,
             replace_label=cfg.dataloader.replace_label,

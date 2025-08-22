@@ -13,7 +13,7 @@ import sklearn.metrics as metrics
 import torch
 import torch.nn as nn
 
-from instageo.model.model import PrithviSeg
+from instageo.model.model import PrithviSeg, UnetRegression
 
 
 class PrithviSegmentationModule(pl.LightningModule):
@@ -538,7 +538,7 @@ class PrithviRegressionModule(pl.LightningModule):
         freeze_backbone: bool = True,
         temporal_step: int = 1,
         weight_decay: float = 1e-2,
-        loss_function: str = "mse",
+        loss_function: str = "smoother",
         ignore_index: int = -100,
         depth: int | None = None,
         log_transform: bool = False,
@@ -560,12 +560,11 @@ class PrithviRegressionModule(pl.LightningModule):
             log_transform (bool): Whether to apply log transformation to target values.
         """
         super().__init__()
-        self.net = PrithviSeg(
-            image_size=image_size,
-            num_classes=1,  # Single output channel for regression
-            temporal_step=temporal_step,
-            freeze_backbone=freeze_backbone,
-            depth=depth,
+        self.net = UnetRegression(
+            in_channels=6,    # your satellite channels
+            classes=1,        # regression output
+            encoder_name="efficientnet-b0",
+            pretrained=True
         )
 
         # Choose loss function
@@ -575,6 +574,8 @@ class PrithviRegressionModule(pl.LightningModule):
             self.criterion = nn.L1Loss(reduction="none")
         elif loss_function == "huber":
             self.criterion = nn.HuberLoss()
+        elif loss_function == "smoother":
+            self.criterion = nn.SmoothL1Loss()
         else:
             raise ValueError(f"Unknown loss function: {loss_function}")
 
